@@ -1,22 +1,23 @@
-// index.js
+// index.js - Complete Working Version
 const express = require('express');
 const path = require('path');
 const fs = require('fs-extra');
 const { makeWASocket, useMultiFileAuthState, Browsers, DisconnectReason, jidNormalizedUser, delay } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const qrcode = require('qrcode');
 const config = require('./config');
 const { initDatabase, getSettings, getAdmins, updateSettings } = require('./lib/database');
-const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive } = require('./lib/credsManager');
+const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
 const { getTimestamp, sleep, formatJid, runtime } = require('./lib/functions');
 const { handleIncomingMessage, handleMessageRevocation } = require('./lib/antiDelete');
-const { getCommand, getAllCommands, getAllCategories } = require('./plugins/command');
+const { getCommand } = require('./plugins/command');
 
 // Load plugins
 require('./plugins/main');
 require('./plugins/download');
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 10000;
 
 // Active sockets storage
 const activeSockets = new Map();
@@ -26,14 +27,13 @@ const socketStartTimes = new Map();
 let currentBot = null;
 let botNumber = null;
 
+// ============ START BOT FUNCTION ============
 async function startBot(number, credsData = null) {
     const cleanNumber = number ? number.replace(/[^0-9]/g, '') : null;
     const sessionPath = path.join(SESSION_BASE_PATH, cleanNumber ? `session_${cleanNumber}` : 'session_default');
     
-    // Ensure session directory exists
     await fs.ensureDir(sessionPath);
     
-    // Load or use provided creds
     let creds = credsData;
     if (cleanNumber && !creds) {
         creds = await loadCredsFromDB(cleanNumber);
@@ -57,7 +57,6 @@ async function startBot(number, credsData = null) {
         }
     });
     
-    // Store socket
     if (cleanNumber) {
         activeSockets.set(cleanNumber, sock);
     }
@@ -66,22 +65,13 @@ async function startBot(number, credsData = null) {
     
     // Handle connection updates
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        if (qr) {
-            console.log('QR Code received (you can display this in web dashboard)');
-            // Emit QR for web dashboard if needed
-            if (global.io) {
-                global.io.emit('qr', qr);
-            }
-        }
+        const { connection, lastDisconnect } = update;
         
         if (connection === 'open') {
             console.log(`✅ Bot connected successfully!`);
             botNumber = sock.user.id.split(':')[0];
             console.log(`📱 Bot Number: ${botNumber}`);
             
-            // Save credentials
             await saveCreds();
             const savedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
             
@@ -90,7 +80,6 @@ async function startBot(number, credsData = null) {
                 await updateSessionActive(cleanNumber, true);
             }
             
-            // Send startup message to owner
             const ownerJid = formatJid(config.OWNER_NUMBER);
             try {
                 await sock.sendMessage(ownerJid, {
@@ -124,7 +113,6 @@ async function startBot(number, credsData = null) {
         }
     });
     
-    // Handle credentials update
     sock.ev.on('creds.update', async () => {
         await saveCreds();
         const updatedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
@@ -144,21 +132,18 @@ async function startBot(number, credsData = null) {
         const sender = msg.key.participant || from;
         const senderNumber = sender.split('@')[0];
         
-        // Get user settings
         let userSettings = config;
         if (cleanNumber) {
             userSettings = await getSettings(cleanNumber);
         }
         
-        // Handle anti-delete - save incoming messages
         if (userSettings.antiDelete || config.ANTI_DELETE) {
             await handleIncomingMessage(sock, msg, from, botNumber);
         }
         
-        // Handle protocol messages (message revocations)
         if (msg.message?.protocolMessage) {
             const protocolMsg = msg.message.protocolMessage;
-            if (protocolMsg.type === 0) { // REVOKE
+            if (protocolMsg.type === 0) {
                 if (userSettings.antiDelete || config.ANTI_DELETE) {
                     await handleMessageRevocation(sock, protocolMsg, from, botNumber);
                 }
@@ -166,7 +151,6 @@ async function startBot(number, credsData = null) {
             return;
         }
         
-        // Extract message text
         let messageText = '';
         if (msg.message.conversation) {
             messageText = msg.message.conversation;
@@ -180,61 +164,41 @@ async function startBot(number, credsData = null) {
         
         if (!messageText) return;
         
-        // Get prefix from settings or config
         const prefix = userSettings.prefix || config.PREFIX;
-        
         if (!messageText.startsWith(prefix)) return;
         
-        // Parse command
         const args = messageText.slice(prefix.length).trim().split(/\s+/);
         const commandName = args[0].toLowerCase();
         const commandArgs = args.slice(1);
-        
-        // Get pushname
         let pushname = msg.pushName || 'User';
-        
-        // Get command
         const command = getCommand(commandName);
         
         if (command) {
             console.log(`📝 Command: ${commandName} from ${senderNumber}`);
             
-            // React to command
             if (command.react) {
                 await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
             }
             
-            // Execute command
             try {
                 await command.execute(
-                    sock, 
-                    msg, 
-                    from, 
-                    commandArgs, 
-                    pushname, 
-                    isGroup, 
-                    botNumber,
+                    sock, msg, from, commandArgs, pushname, isGroup, botNumber,
                     async (text) => {
                         return await sock.sendMessage(from, { text }, { quoted: msg });
                     }
                 );
             } catch (err) {
                 console.error(`Error executing command ${commandName}:`, err);
-                await sock.sendMessage(from, { 
-                    text: `❌ Error: ${err.message}` 
-                }, { quoted: msg });
+                await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
             }
         }
     });
     
-    // Handle group participants update
     sock.ev.on('group-participants.update', async (update) => {
         const { id, participants, action } = update;
-        
         if (action === 'add') {
             for (const participant of participants) {
                 if (participant === sock.user.id) {
-                    // Bot was added to group
                     console.log(`🤖 Bot added to group: ${id}`);
                     await sock.sendMessage(id, {
                         text: `╭───❍ 《 ${config.BOT_NAME} 》
@@ -251,19 +215,11 @@ async function startBot(number, credsData = null) {
     return sock;
 }
 
-// Initialize web dashboard
-async function initWebDashboard() {
-    const webServer = require('./web/server');
-    return webServer;
-}
-
-// Auto reconnect on startup
+// ============ AUTO RECONNECT ============
 async function autoReconnect() {
     try {
         await initDatabase();
-        const { getAllActiveSessions } = require('./lib/credsManager');
         const sessions = await getAllActiveSessions();
-        
         console.log(`🔄 Found ${sessions.length} sessions to reconnect`);
         
         for (const session of sessions) {
@@ -273,106 +229,203 @@ async function autoReconnect() {
                 await sleep(2000);
             }
         }
-        
-        // If no sessions, start bot with default number for pairing
-        if (sessions.length === 0 && config.OWNER_NUMBER) {
-            console.log('📱 No sessions found. Bot will wait for pairing via web dashboard.');
-        }
-        
     } catch (error) {
         console.error('Auto reconnect error:', error);
     }
 }
 
-// Express routes for pairing
+// ============ EXPRESS MIDDLEWARE ============
 app.use(express.json());
 
-// Health check
+// ============ WEB DASHBOARD - ROOT ROUTE ============
+app.get('/', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WhatsApp Bot - Pair Your Number</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 30px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        h1 { color: #333; margin-bottom: 10px; }
+        .subtitle { color: #666; margin-bottom: 30px; }
+        input {
+            width: 100%;
+            padding: 15px;
+            font-size: 18px;
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        input:focus { outline: none; border-color: #667eea; }
+        .btn-group { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; }
+        button {
+            flex: 1;
+            padding: 15px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 15px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover { transform: translateY(-2px); }
+        .code-btn { background: #667eea; color: white; }
+        .qr-btn { background: #48bb78; color: white; }
+        .result {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .pair-code {
+            font-size: 36px;
+            font-weight: bold;
+            letter-spacing: 10px;
+            color: #667eea;
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            font-family: monospace;
+        }
+        .qr-img { max-width: 200px; margin: 10px auto; }
+        .loading { color: #667eea; }
+        .error { color: #e53e3e; }
+        .success { color: #38a169; }
+        footer { margin-top: 20px; color: #999; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 WhatsApp Bot</h1>
+        <p class="subtitle">Connect your WhatsApp number</p>
+        
+        <input type="text" id="number" placeholder="Enter number (e.g., 947xxxxxxxx)">
+        
+        <div class="btn-group">
+            <button class="code-btn" onclick="pairWithCode()">🔐 Pair with Code</button>
+            <button class="qr-btn" onclick="pairWithQR()">📱 Pair with QR</button>
+        </div>
+        
+        <div id="result" class="result"></div>
+        <footer>© WhatsApp Bot | Version 2.0</footer>
+    </div>
+
+    <script>
+        async function pairWithCode() {
+            const number = document.getElementById('number').value;
+            if (!number) { alert('Please enter your number'); return; }
+            
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<div class="loading">⏳ Requesting code...</div>';
+            
+            try {
+                const res = await fetch('/pair/code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ number: number })
+                });
+                const data = await res.json();
+                
+                if (data.code) {
+                    resultDiv.innerHTML = '<div class="success">✅ Pairing code generated!</div><div class="pair-code">' + data.code + '</div><p>Open WhatsApp → Settings → Linked Devices → Link with Code</p>';
+                } else if (data.status === 'already_paired') {
+                    resultDiv.innerHTML = '<div class="success">✅ Already connected!</div>';
+                } else {
+                    resultDiv.innerHTML = '<div class="error">❌ Failed to get code. Make sure number is correct.</div>';
+                }
+            } catch(e) {
+                resultDiv.innerHTML = '<div class="error">❌ Error: ' + e.message + '</div>';
+            }
+        }
+        
+        async function pairWithQR() {
+            const number = document.getElementById('number').value;
+            if (!number) { alert('Please enter your number'); return; }
+            
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<div class="loading">⏳ Generating QR...</div>';
+            
+            try {
+                const res = await fetch('/pair/qr', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ number: number })
+                });
+                const data = await res.json();
+                
+                if (data.qr) {
+                    resultDiv.innerHTML = '<div class="success">✅ QR Code generated!</div><img class="qr-img" src="' + data.qr + '" /><p>Scan with WhatsApp → Settings → Linked Devices</p>';
+                } else {
+                    resultDiv.innerHTML = '<div class="error">❌ Failed to generate QR</div>';
+                }
+            } catch(e) {
+                resultDiv.innerHTML = '<div class="error">❌ Error: ' + e.message + '</div>';
+            }
+        }
+    </script>
+</body>
+</html>
+    `);
+});
+
+// ============ HEALTH CHECK ============
 app.get('/health', (req, res) => {
-    res.json({
-        status: 'ok',
+    res.json({ 
+        status: 'ok', 
         uptime: runtime(process.uptime()),
         activeSessions: activeSockets.size,
-        botNumber: botNumber
+        botNumber: botNumber,
+        timestamp: new Date().toISOString()
     });
 });
 
-// Pair with QR
-app.post('/pair/qr', async (req, res) => {
-    const { number } = req.body;
-    
-    if (!number) {
-        return res.status(400).json({ error: 'Number is required' });
+// ============ GET ALL SESSIONS ============
+app.get('/sessions', async (req, res) => {
+    try {
+        const sessions = await getAllActiveSessions();
+        res.json({ sessions: sessions || [] });
+    } catch(e) {
+        res.json({ sessions: [] });
     }
-    
+});
+
+// ============ DELETE SESSION ============
+app.delete('/session/:number', async (req, res) => {
+    const { number } = req.params;
     const cleanNumber = number.replace(/[^0-9]/g, '');
     
-    // Check if session already exists
-    const existing = activeSockets.has(cleanNumber);
-    if (existing) {
-        return res.json({ status: 'already_paired', message: 'Session already active' });
+    if (activeSockets.has(cleanNumber)) {
+        const sock = activeSockets.get(cleanNumber);
+        sock.end(new Error('Session deleted'));
+        activeSockets.delete(cleanNumber);
+        socketStartTimes.delete(cleanNumber);
     }
     
-    // Start pairing process
-    let qrSent = false;
-    let timeoutId;
-    
-    const tempSessionPath = path.join(SESSION_BASE_PATH, `temp_${cleanNumber}`);
-    await fs.ensureDir(tempSessionPath);
-    
-    const { state, saveCreds } = await useMultiFileAuthState(tempSessionPath);
-    const logger = pino({ level: 'fatal' });
-    
-    const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: false,
-        logger,
-        browser: Browsers.macOS('Safari')
-    });
-    
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, qr } = update;
-        
-        if (qr && !qrSent) {
-            qrSent = true;
-            const qrcode = require('qrcode');
-            const qrBase64 = await qrcode.toDataURL(qr);
-            
-            res.json({
-                status: 'qr',
-                qr: qrBase64,
-                message: 'Scan QR code with WhatsApp'
-            });
-            
-            timeoutId = setTimeout(() => {
-                sock.end(new Error('Timeout'));
-                fs.removeSync(tempSessionPath);
-            }, 120000);
-        }
-        
-        if (connection === 'open') {
-            clearTimeout(timeoutId);
-            await saveCreds();
-            const creds = await fs.readJson(path.join(tempSessionPath, 'creds.json'));
-            
-            // Save to permanent location
-            const permPath = path.join(SESSION_BASE_PATH, `session_${cleanNumber}`);
-            await fs.copy(tempSessionPath, permPath);
-            await fs.remove(tempSessionPath);
-            
-            await saveCredsToDB(cleanNumber, creds, true);
-            await startBot(cleanNumber, creds);
-            
-            res.json({
-                status: 'success',
-                message: 'Successfully paired!',
-                number: cleanNumber
-            });
-        }
-    });
+    await removeSession(cleanNumber);
+    res.json({ success: true, message: 'Session deleted' });
 });
 
-// Pair with code (8-digit code)
+// ============ PAIR WITH CODE ============
 app.post('/pair/code', async (req, res) => {
     const { number } = req.body;
     
@@ -382,7 +435,6 @@ app.post('/pair/code', async (req, res) => {
     
     const cleanNumber = number.replace(/[^0-9]/g, '');
     
-    // Check if session already exists
     const existing = activeSockets.has(cleanNumber);
     if (existing) {
         return res.json({ status: 'already_paired', message: 'Session already active' });
@@ -401,270 +453,110 @@ app.post('/pair/code', async (req, res) => {
         browser: Browsers.macOS('Safari')
     });
     
-    let pairingCode = null;
+    let responded = false;
     
     sock.ev.on('connection.update', async (update) => {
         const { connection } = update;
         
-        if (connection === 'open') {
+        if (connection === 'open' && !responded) {
+            responded = true;
             await saveCreds();
             const creds = await fs.readJson(path.join(sessionPath, 'creds.json'));
             await saveCredsToDB(cleanNumber, creds, true);
             await startBot(cleanNumber, creds);
-            
-            res.json({
-                status: 'success',
-                message: 'Successfully paired!',
-                number: cleanNumber
-            });
         }
     });
     
-    // Request pairing code
     setTimeout(async () => {
         try {
-            pairingCode = await sock.requestPairingCode(cleanNumber);
-            res.json({
-                status: 'code',
-                code: pairingCode,
-                message: 'Use this code in WhatsApp Linked Devices'
-            });
+            const code = await sock.requestPairingCode(cleanNumber);
+            if (!responded) {
+                responded = true;
+                res.json({ code: code, status: 'success' });
+            }
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            if (!responded) {
+                responded = true;
+                res.status(500).json({ error: error.message });
+            }
         }
         
         setTimeout(() => {
-            if (!pairingCode) {
+            if (!responded) {
                 sock.end(new Error('Timeout'));
             }
         }, 60000);
     }, 2000);
 });
 
-// Get active sessions
-app.get('/sessions', async (req, res) => {
-    const { getAllActiveSessions } = require('./lib/credsManager');
-    const sessions = await getAllActiveSessions();
-    res.json({
-        sessions: sessions.map(s => ({
-            number: s.number,
-            active: s.active,
-            createdAt: s.createdAt,
-            updatedAt: s.updatedAt
-        }))
-    });
-});
-
-// Delete session
-app.delete('/session/:number', async (req, res) => {
-    const { number } = req.params;
+// ============ PAIR WITH QR ============
+app.post('/pair/qr', async (req, res) => {
+    const { number } = req.body;
+    
+    if (!number) {
+        return res.status(400).json({ error: 'Number is required' });
+    }
+    
     const cleanNumber = number.replace(/[^0-9]/g, '');
     
-    // Close socket if active
-    if (activeSockets.has(cleanNumber)) {
-        const sock = activeSockets.get(cleanNumber);
-        sock.end(new Error('Session deleted'));
-        activeSockets.delete(cleanNumber);
-        socketStartTimes.delete(cleanNumber);
+    const existing = activeSockets.has(cleanNumber);
+    if (existing) {
+        return res.json({ status: 'already_paired', message: 'Session already active' });
     }
     
-    // Remove from database
-    const { removeSession } = require('./lib/credsManager');
-    await removeSession(cleanNumber);
+    const tempSessionPath = path.join(SESSION_BASE_PATH, `temp_${cleanNumber}`);
+    await fs.ensureDir(tempSessionPath);
     
-    res.json({ success: true, message: 'Session deleted' });
-});
-
-// Start the server
-async function main() {
-    // Initialize database
-    await initDatabase();
+    const { state, saveCreds } = await useMultiFileAuthState(tempSessionPath);
+    const logger = pino({ level: 'fatal' });
     
-    // Start web dashboard
-    await initWebDashboard();
-    // Serve web dashboard
-app.get('/', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>WhatsApp Bot - Pair Your Number</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                body { 
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    min-height: 100vh;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    padding: 20px;
-                }
-                .container {
-                    background: white;
-                    border-radius: 30px;
-                    padding: 40px;
-                    max-width: 500px;
-                    width: 100%;
-                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-                    text-align: center;
-                }
-                h1 { color: #333; margin-bottom: 10px; }
-                .subtitle { color: #666; margin-bottom: 30px; }
-                input {
-                    width: 100%;
-                    padding: 15px;
-                    font-size: 18px;
-                    border: 2px solid #e0e0e0;
-                    border-radius: 15px;
-                    margin-bottom: 20px;
-                    text-align: center;
-                }
-                input:focus { outline: none; border-color: #667eea; }
-                .btn-group { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; }
-                button {
-                    flex: 1;
-                    padding: 15px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    border: none;
-                    border-radius: 15px;
-                    cursor: pointer;
-                    transition: transform 0.2s;
-                }
-                button:hover { transform: translateY(-2px); }
-                .code-btn { background: #667eea; color: white; }
-                .qr-btn { background: #48bb78; color: white; }
-                .result {
-                    background: #f8f9fa;
-                    border-radius: 15px;
-                    padding: 20px;
-                    margin-top: 20px;
-                }
-                .pair-code {
-                    font-size: 36px;
-                    font-weight: bold;
-                    letter-spacing: 10px;
-                    color: #667eea;
-                    background: white;
-                    padding: 15px;
-                    border-radius: 10px;
-                    font-family: monospace;
-                }
-                .qr-img { max-width: 200px; margin: 10px auto; }
-                .loading { color: #667eea; }
-                .error { color: #e53e3e; }
-                .success { color: #38a169; }
-                footer { margin-top: 20px; color: #999; font-size: 12px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🤖 WhatsApp Bot</h1>
-                <p class="subtitle">Connect your WhatsApp number</p>
-                
-                <input type="text" id="number" placeholder="Enter number (e.g., 947xxxxxxxx)">
-                
-                <div class="btn-group">
-                    <button class="code-btn" onclick="pairWithCode()">🔐 Pair with Code</button>
-                    <button class="qr-btn" onclick="pairWithQR()">📱 Pair with QR</button>
-                </div>
-                
-                <div id="result" class="result"></div>
-                <footer>© WhatsApp Bot | Version 2.0</footer>
-            </div>
-
-            <script>
-                async function pairWithCode() {
-                    const number = document.getElementById('number').value;
-                    if (!number) { alert('Please enter your number'); return; }
-                    
-                    const resultDiv = document.getElementById('result');
-                    resultDiv.innerHTML = '<div class="loading">⏳ Requesting code...</div>';
-                    
-                    try {
-                        const res = await fetch('/pair/code', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ number: number })
-                        });
-                        const data = await res.json();
-                        
-                        if (data.code) {
-                            resultDiv.innerHTML = \`
-                                <div class="success">✅ Pairing code generated!</div>
-                                <div class="pair-code">\${data.code}</div>
-                                <p>Open WhatsApp → Settings → Linked Devices → Link with Code</p>
-                            \`;
-                        } else {
-                            resultDiv.innerHTML = '<div class="error">❌ Failed to get code</div>';
-                        }
-                    } catch(e) {
-                        resultDiv.innerHTML = '<div class="error">❌ Error: ' + e.message + '</div>';
-                    }
-                }
-                
-                async function pairWithQR() {
-                    const number = document.getElementById('number').value;
-                    if (!number) { alert('Please enter your number'); return; }
-                    
-                    const resultDiv = document.getElementById('result');
-                    resultDiv.innerHTML = '<div class="loading">⏳ Generating QR...</div>';
-                    
-                    try {
-                        const res = await fetch('/pair/qr', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ number: number })
-                        });
-                        const data = await res.json();
-                        
-                        if (data.qr) {
-                            resultDiv.innerHTML = \`
-                                <div class="success">✅ QR Code generated!</div>
-                                <img class="qr-img" src="\${data.qr}" />
-                                <p>Scan with WhatsApp → Settings → Linked Devices</p>
-                            \`;
-                        } else {
-                            resultDiv.innerHTML = '<div class="error">❌ Failed to generate QR</div>';
-                        }
-                    } catch(e) {
-                        resultDiv.innerHTML = '<div class="error">❌ Error: ' + e.message + '</div>';
-                    }
-                }
-            </script>
-        </body>
-        </html>
-    `);
-});
-
-// Health check
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString()
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger,
+        browser: Browsers.macOS('Safari')
+    });
+    
+    let responded = false;
+    
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, qr } = update;
+        
+        if (qr && !responded) {
+            responded = true;
+            const qrBase64 = await qrcode.toDataURL(qr);
+            res.json({ status: 'qr', qr: qrBase64 });
+            
+            setTimeout(() => {
+                sock.end(new Error('Timeout'));
+                fs.removeSync(tempSessionPath);
+            }, 120000);
+        }
+        
+        if (connection === 'open') {
+            await saveCreds();
+            const creds = await fs.readJson(path.join(tempSessionPath, 'creds.json'));
+            
+            const permPath = path.join(SESSION_BASE_PATH, `session_${cleanNumber}`);
+            await fs.copy(tempSessionPath, permPath);
+            await fs.remove(tempSessionPath);
+            
+            await saveCredsToDB(cleanNumber, creds, true);
+            await startBot(cleanNumber, creds);
+        }
     });
 });
 
-// Sessions endpoint
-app.get('/sessions', async (req, res) => {
-    try {
-        const { getAllActiveSessions } = require('./lib/credsManager');
-        const sessions = await getAllActiveSessions();
-        res.json({ sessions: sessions || [] });
-    } catch(e) {
-        res.json({ sessions: [] });
-    }
-});
+// ============ MAIN FUNCTION ============
+async function main() {
+    await initDatabase();
+    
     // Start express server
     app.listen(PORT, () => {
         console.log(`🌐 Web server running on http://localhost:${PORT}`);
-        console.log(`🔐 Login: ${config.DASHBOARD_USERNAME} / ${config.DASHBOARD_PASSWORD}`);
+        console.log(`🔐 Dashboard: https://dinu-f6a134d4af89.herokuapp.com`);
     });
     
-    // Auto reconnect existing sessions
     await autoReconnect();
     
     console.log(`
@@ -672,17 +564,16 @@ app.get('/sessions', async (req, res) => {
 ║     ${config.BOT_NAME} - WhatsApp Bot       ║
 ║     Version: ${config.BOT_VERSION}                    ║
 ║     Status: 🟢 Running                  ║
+║     Port: ${PORT}                        ║
 ╚═══════════════════════════════════════╝
     `);
 }
 
-// Graceful shutdown
+// ============ ERROR HANDLING ============
 process.on('SIGINT', async () => {
     console.log('Shutting down...');
     for (const [number, sock] of activeSockets) {
-        try {
-            sock.end(new Error('Shutdown'));
-        } catch (e) {}
+        try { sock.end(new Error('Shutdown')); } catch (e) {}
     }
     process.exit(0);
 });
@@ -691,6 +582,7 @@ process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
 });
 
+// Start the bot
 main();
 
 module.exports = { startBot, activeSockets };
