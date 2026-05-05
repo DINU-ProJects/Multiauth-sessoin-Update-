@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pair with Code - WhatsApp Bot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 30px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        input {
+            width: 100%;
+            padding: 15px;
+            font-size: 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 15px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        .back-btn { background: #666; }
+        .pair-code {
+            font-size: 36px;
+            font-weight: bold;
+            letter-spacing: 10px;
+            color: #667eea;
+            background: #f0f0f0;
+            padding: 20px;
+            border-radius: 15px;
+            margin: 20px 0;
+        }
+        .result { margin-top: 20px; }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Pair with Code</h1>
+        <p>Get 8-digit code to connect</p>
+        
+        <input type="text" id="number" placeholder="Enter WhatsApp number (e.g., 947xxxxxxxx)">
+        <button onclick="getCode()">Get Code</button>
+        <button class="back-btn" onclick="window.location.href='/'">← Back</button>
+        
+        <div id="result" class="result"></div>
+    </div>
+
+    <script>
+        async function getCode() {
+            const number = document.getElementById('number').value;
+            if (!number) { alert('Enter your number'); return; }
+            
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<div>⏳ Requesting code...</div>';
+            
+            try {
+                const res = await fetch('/api/pair/code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ number: number })
+                });
+                const data = await res.json();
+                
+                if (data.code) {
+                    resultDiv.innerHTML = `<div class="success">✅ Code generated!</div><div class="pair-code">${data.code}</div><p>Open WhatsApp → Settings → Linked Devices → Link with Code</p>`;
+                } else if (data.status === 'already_paired') {
+                    resultDiv.innerHTML = '<div class="success">✅ Already connected!</div>';
+                } else {
+                    resultDiv.innerHTML = '<div class="error">❌ Failed to get code. Try again.</div>';
+                }
+            } catch(e) {
+                resultDiv.innerHTML = '<div class="error">❌ Error occurred</div>';
+            }
+        }
+    </script>
+</body>
+</html>
