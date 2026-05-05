@@ -9,7 +9,7 @@
     "web": "node web/server.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "latest",
+    "@whiskeysockets/baileys": "npm:@neoxr/wb",
     "express": "^4.18.2",
     "mongoose": "^8.0.0",
     "mongodb": "^6.0.0",
