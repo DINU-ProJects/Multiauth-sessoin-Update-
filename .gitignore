@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Session files
+session/
+message_data/
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# PM2 files
+.pm2/
