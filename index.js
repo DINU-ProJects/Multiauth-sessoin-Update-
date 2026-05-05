@@ -482,7 +482,182 @@ async function main() {
     
     // Start web dashboard
     await initWebDashboard();
-    
+    // Serve web dashboard
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>WhatsApp Bot - Pair Your Number</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                body { 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    padding: 20px;
+                }
+                .container {
+                    background: white;
+                    border-radius: 30px;
+                    padding: 40px;
+                    max-width: 500px;
+                    width: 100%;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                    text-align: center;
+                }
+                h1 { color: #333; margin-bottom: 10px; }
+                .subtitle { color: #666; margin-bottom: 30px; }
+                input {
+                    width: 100%;
+                    padding: 15px;
+                    font-size: 18px;
+                    border: 2px solid #e0e0e0;
+                    border-radius: 15px;
+                    margin-bottom: 20px;
+                    text-align: center;
+                }
+                input:focus { outline: none; border-color: #667eea; }
+                .btn-group { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; }
+                button {
+                    flex: 1;
+                    padding: 15px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 15px;
+                    cursor: pointer;
+                    transition: transform 0.2s;
+                }
+                button:hover { transform: translateY(-2px); }
+                .code-btn { background: #667eea; color: white; }
+                .qr-btn { background: #48bb78; color: white; }
+                .result {
+                    background: #f8f9fa;
+                    border-radius: 15px;
+                    padding: 20px;
+                    margin-top: 20px;
+                }
+                .pair-code {
+                    font-size: 36px;
+                    font-weight: bold;
+                    letter-spacing: 10px;
+                    color: #667eea;
+                    background: white;
+                    padding: 15px;
+                    border-radius: 10px;
+                    font-family: monospace;
+                }
+                .qr-img { max-width: 200px; margin: 10px auto; }
+                .loading { color: #667eea; }
+                .error { color: #e53e3e; }
+                .success { color: #38a169; }
+                footer { margin-top: 20px; color: #999; font-size: 12px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🤖 WhatsApp Bot</h1>
+                <p class="subtitle">Connect your WhatsApp number</p>
+                
+                <input type="text" id="number" placeholder="Enter number (e.g., 947xxxxxxxx)">
+                
+                <div class="btn-group">
+                    <button class="code-btn" onclick="pairWithCode()">🔐 Pair with Code</button>
+                    <button class="qr-btn" onclick="pairWithQR()">📱 Pair with QR</button>
+                </div>
+                
+                <div id="result" class="result"></div>
+                <footer>© WhatsApp Bot | Version 2.0</footer>
+            </div>
+
+            <script>
+                async function pairWithCode() {
+                    const number = document.getElementById('number').value;
+                    if (!number) { alert('Please enter your number'); return; }
+                    
+                    const resultDiv = document.getElementById('result');
+                    resultDiv.innerHTML = '<div class="loading">⏳ Requesting code...</div>';
+                    
+                    try {
+                        const res = await fetch('/pair/code', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ number: number })
+                        });
+                        const data = await res.json();
+                        
+                        if (data.code) {
+                            resultDiv.innerHTML = \`
+                                <div class="success">✅ Pairing code generated!</div>
+                                <div class="pair-code">\${data.code}</div>
+                                <p>Open WhatsApp → Settings → Linked Devices → Link with Code</p>
+                            \`;
+                        } else {
+                            resultDiv.innerHTML = '<div class="error">❌ Failed to get code</div>';
+                        }
+                    } catch(e) {
+                        resultDiv.innerHTML = '<div class="error">❌ Error: ' + e.message + '</div>';
+                    }
+                }
+                
+                async function pairWithQR() {
+                    const number = document.getElementById('number').value;
+                    if (!number) { alert('Please enter your number'); return; }
+                    
+                    const resultDiv = document.getElementById('result');
+                    resultDiv.innerHTML = '<div class="loading">⏳ Generating QR...</div>';
+                    
+                    try {
+                        const res = await fetch('/pair/qr', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ number: number })
+                        });
+                        const data = await res.json();
+                        
+                        if (data.qr) {
+                            resultDiv.innerHTML = \`
+                                <div class="success">✅ QR Code generated!</div>
+                                <img class="qr-img" src="\${data.qr}" />
+                                <p>Scan with WhatsApp → Settings → Linked Devices</p>
+                            \`;
+                        } else {
+                            resultDiv.innerHTML = '<div class="error">❌ Failed to generate QR</div>';
+                        }
+                    } catch(e) {
+                        resultDiv.innerHTML = '<div class="error">❌ Error: ' + e.message + '</div>';
+                    }
+                }
+            </script>
+        </body>
+        </html>
+    `);
+});
+
+// Health check
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Sessions endpoint
+app.get('/sessions', async (req, res) => {
+    try {
+        const { getAllActiveSessions } = require('./lib/credsManager');
+        const sessions = await getAllActiveSessions();
+        res.json({ sessions: sessions || [] });
+    } catch(e) {
+        res.json({ sessions: [] });
+    }
+});
     // Start express server
     app.listen(PORT, () => {
         console.log(`🌐 Web server running on http://localhost:${PORT}`);
