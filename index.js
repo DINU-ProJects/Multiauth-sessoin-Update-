@@ -26,6 +26,7 @@ const socketStartTimes = new Map();
 // Bot instance
 let currentBot = null;
 let botNumber = null;
+global.qrConnected = false;
 
 // ============ START BOT FUNCTION ============
 async function startBot(number, credsData = null) {
@@ -291,6 +292,7 @@ app.get('/', (req, res) => {
         button:hover { transform: translateY(-2px); }
         .code-btn { background: #667eea; color: white; }
         .qr-btn { background: #48bb78; color: white; }
+        .qr-only-btn { background: #ed8936; color: white; }
         .result {
             background: #f8f9fa;
             border-radius: 15px;
@@ -323,7 +325,8 @@ app.get('/', (req, res) => {
         
         <div class="btn-group">
             <button class="code-btn" onclick="pairWithCode()">🔐 Pair with Code</button>
-            <button class="qr-btn" onclick="pairWithQR()">📱 Pair with QR</button>
+            <button class="qr-btn" onclick="pairWithQR()">📱 Pair with QR (with number)</button>
+            <button class="qr-only-btn" onclick="window.location.href='/qr'">📱 QR Only (no number)</button>
         </div>
         
         <div id="result" class="result"></div>
@@ -388,6 +391,155 @@ app.get('/', (req, res) => {
     `);
 });
 
+// ============ QR CODE ONLY (NO NUMBER NEEDED) ============
+app.get('/qr', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>QR Code - WhatsApp Bot</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial; text-align: center; padding: 50px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; }
+        .container { background: white; border-radius: 30px; padding: 40px; max-width: 450px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.3); text-align: center; }
+        button { padding: 15px 30px; font-size: 18px; background: #667eea; color: white; border: none; border-radius: 15px; cursor: pointer; margin: 10px; }
+        .qr-container { margin-top: 20px; display: none; }
+        img { width: 250px; height: 250px; border-radius: 20px; border: 5px solid #667eea; }
+        .loading { color: #667eea; font-size: 18px; }
+        .back-btn { background: #48bb78; }
+        .status { margin-top: 15px; padding: 10px; border-radius: 10px; }
+        .waiting { background: #fef3c7; color: #92400e; }
+        .connected { background: #d4edda; color: #155724; }
+        .timeout { background: #fee2e2; color: #991b1b; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Scan QR Code</h1>
+        <p>No number needed - Just scan!</p>
+        <button onclick="generateQR()">📱 Generate QR Code</button>
+        <button class="back-btn" onclick="window.location.href='/'">← Back</button>
+        <div id="qrContainer" class="qr-container"></div>
+        <div id="status"></div>
+    </div>
+    <script>
+        let statusInterval = null;
+        
+        async function generateQR() {
+            const qrContainer = document.getElementById('qrContainer');
+            const statusDiv = document.getElementById('status');
+            
+            qrContainer.style.display = 'block';
+            qrContainer.innerHTML = '<div class="loading">⏳ Generating QR Code...</div>';
+            statusDiv.innerHTML = '';
+            
+            if (statusInterval) clearInterval(statusInterval);
+            
+            try {
+                const response = await fetch('/generate-qr');
+                const html = await response.text();
+                qrContainer.innerHTML = html;
+                
+                statusInterval = setInterval(async () => {
+                    try {
+                        const res = await fetch('/check-connection');
+                        const data = await res.json();
+                        if (data.connected) {
+                            clearInterval(statusInterval);
+                            statusDiv.innerHTML = '<div class="status connected">✅ Connected successfully! Redirecting...</div>';
+                            setTimeout(() => { window.location.href = '/'; }, 2000);
+                        }
+                    } catch(e) {}
+                }, 3000);
+                
+            } catch(e) {
+                qrContainer.innerHTML = '<div class="error">❌ Error generating QR</div>';
+            }
+        }
+    </script>
+</body>
+</html>
+    `);
+});
+
+// Generate QR endpoint (NO NUMBER NEEDED)
+app.get('/generate-qr', async (req, res) => {
+    const sessionPath = path.join(SESSION_BASE_PATH, `qr_${Date.now()}`);
+    await fs.ensureDir(sessionPath);
+    
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const logger = pino({ level: 'fatal' });
+    
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger,
+        browser: Browsers.macOS('Safari')
+    });
+    
+    let qrSent = false;
+    
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, qr } = update;
+        
+        if (qr && !qrSent) {
+            qrSent = true;
+            const qrBase64 = await qrcode.toDataURL(qr);
+            res.send(`
+                <img src="${qrBase64}" style="width:250px;height:250px;border-radius:15px;" />
+                <div id="conn-status" class="status waiting">⏳ Waiting for scan...</div>
+                <script>
+                    let checkCount = 0;
+                    const interval = setInterval(async () => {
+                        checkCount++;
+                        try {
+                            const res = await fetch('/check-connection');
+                            const data = await res.json();
+                            if (data.connected) {
+                                clearInterval(interval);
+                                document.getElementById('conn-status').innerHTML = '✅ Connected! Redirecting...';
+                                document.getElementById('conn-status').className = 'status connected';
+                                setTimeout(() => { window.location.href = '/'; }, 2000);
+                            } else if (checkCount > 40) {
+                                clearInterval(interval);
+                                document.getElementById('conn-status').innerHTML = '⏰ Timeout. Please try again.';
+                                document.getElementById('conn-status').className = 'status timeout';
+                            }
+                        } catch(e) {}
+                    }, 3000);
+                </script>
+            `);
+        }
+        
+        if (connection === 'open') {
+            await saveCreds();
+            const creds = await fs.readJson(path.join(sessionPath, 'creds.json'));
+            const botNumber = sock.user.id.split(':')[0];
+            
+            const permPath = path.join(SESSION_BASE_PATH, `session_${botNumber}`);
+            await fs.copy(sessionPath, permPath);
+            await fs.remove(sessionPath);
+            await saveCredsToDB(botNumber, creds, true);
+            await startBot(botNumber, creds);
+            
+            global.qrConnected = true;
+            setTimeout(() => { global.qrConnected = false; }, 10000);
+        }
+    });
+    
+    setTimeout(() => {
+        if (!qrSent) {
+            res.status(504).send('<div class="error">⏰ Timeout - Please try again</div>');
+            sock.end(new Error('Timeout'));
+        }
+    }, 60000);
+});
+
+// Check connection status
+app.get('/check-connection', (req, res) => {
+    res.json({ connected: global.qrConnected || false });
+});
+
 // ============ HEALTH CHECK ============
 app.get('/health', (req, res) => {
     res.json({ 
@@ -425,7 +577,7 @@ app.delete('/session/:number', async (req, res) => {
     res.json({ success: true, message: 'Session deleted' });
 });
 
-// ============ PAIR WITH CODE ============
+// ============ PAIR WITH CODE (8-DIGIT CODE) ============
 app.post('/pair/code', async (req, res) => {
     const { number } = req.body;
     
@@ -489,7 +641,7 @@ app.post('/pair/code', async (req, res) => {
     }, 2000);
 });
 
-// ============ PAIR WITH QR ============
+// ============ PAIR WITH QR (WITH NUMBER) ============
 app.post('/pair/qr', async (req, res) => {
     const { number } = req.body;
     
@@ -554,7 +706,7 @@ async function main() {
     // Start express server
     app.listen(PORT, () => {
         console.log(`🌐 Web server running on http://localhost:${PORT}`);
-        console.log(`🔐 Dashboard: https://dinu-f6a134d4af89.herokuapp.com`);
+        console.log(`🔗 Open: https://dinu-f6a134d4af89.herokuapp.com`);
     });
     
     await autoReconnect();
