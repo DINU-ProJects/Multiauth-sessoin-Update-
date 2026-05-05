@@ -38,4 +38,56 @@
         img { width: 250px; height: 250px; margin: 20px auto; border-radius: 15px; }
         .status { margin-top: 15px; padding: 10px; border-radius: 10px; }
         .waiting { background: #fef3c7; color: #92400e; }
-        .
+        .connected { background: #d4edda; color: #155724; }
+        .loading { color: #667eea; }
+        .error { color: #e53e3e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 Scan QR Code</h1>
+        <p>No number needed - Just scan!</p>
+        <button onclick="generateQR()">Generate QR Code</button>
+        <button class="back-btn" onclick="window.location.href='/'">← Back</button>
+        <div id="qrContainer" class="qr-container"></div>
+        <div id="status"></div>
+    </div>
+
+    <script>
+        let statusInterval = null;
+        
+        async function generateQR() {
+            const container = document.getElementById('qrContainer');
+            const statusDiv = document.getElementById('status');
+            
+            container.innerHTML = '<div class="loading">⏳ Generating QR...</div>';
+            statusDiv.innerHTML = '';
+            if (statusInterval) clearInterval(statusInterval);
+            
+            try {
+                const res = await fetch('/api/generate-qr');
+                const data = await res.json();
+                
+                if (data.qr) {
+                    container.innerHTML = `<img src="${data.qr}" />`;
+                    statusDiv.innerHTML = '<div class="status waiting">⏳ Scan with WhatsApp</div>';
+                    
+                    statusInterval = setInterval(async () => {
+                        const check = await fetch('/api/qr-status');
+                        const status = await check.json();
+                        if (status.connected) {
+                            clearInterval(statusInterval);
+                            statusDiv.innerHTML = '<div class="status connected">✅ Connected! Redirecting...</div>';
+                            setTimeout(() => { window.location.href = '/'; }, 2000);
+                        }
+                    }, 3000);
+                } else {
+                    container.innerHTML = '<div class="error">❌ Failed to generate QR</div>';
+                }
+            } catch(e) {
+                container.innerHTML = '<div class="error">❌ Error generating QR</div>';
+            }
+        }
+    </script>
+</body>
+</html>
