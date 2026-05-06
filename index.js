@@ -1,14 +1,8 @@
-// index.js - උඩින්ම, baileys import කරන්න කලින්
+// index.js - Full Fixed & Improved Version
 const { File } = require('node:buffer');
 if (typeof globalThis.File === 'undefined') {
   globalThis.File = File;
 }
-
-//const express = require('express');
-// ...rest of code
-// index.js - Fixed Complete Version
-const botJid = sock.user.id;
-//await sock.sendMessage(botJid, { text: 'Connected!' });
 
 const express = require('express');
 const path = require('path');
@@ -18,11 +12,11 @@ const {
     useMultiFileAuthState,
     Browsers,
     DisconnectReason,
-    fetchLatestBaileysVersion, // FIX: Added this
-    makeCacheableSignalKeyStore // FIX: Added this
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const QRCode = require('qrcode'); // FIX: Changed from qrcode to QRCode
+const QRCode = require('qrcode');
 const config = require('./config');
 const { initDatabase, getSettings } = require('./lib/database');
 const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
@@ -48,15 +42,14 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ============ START BOT FUNCTION ============
 async function startBot(number, credsData = null) {
-    const cleanNumber = number ? number.replace(/[^0-9]/g, '') : null;
-    
+    const cleanNumber = number? number.replace(/[^0-9]/g, '') : null;
+
     // FIX: Already running නම් ආපහු start කරන්න එපා
     if (cleanNumber && activeSockets.has(cleanNumber)) {
         console.log(`⚠️ Bot already running for ${cleanNumber}`);
         return activeSockets.get(cleanNumber);
     }
-    
-    
+
     const sessionPath = path.join(SESSION_BASE_PATH, cleanNumber? `session_${cleanNumber}` : 'session_default');
 
     await fs.ensureDir(sessionPath);
@@ -73,15 +66,23 @@ async function startBot(number, credsData = null) {
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const logger = pino({ level: 'fatal' });
+    const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
-        auth: state,
+        version,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" }))
+        },
         printQRInTerminal: false,
         logger,
-        browser: Browsers.macOS('Safari'),
+        browser: Browsers.ubuntu('Chrome'), // FIX: ubuntu use කරන්න, pair code වලට හොඳයි
         getMessage: async (key) => {
             return { conversation: "Hello" };
-        }
+        },
+        markOnlineOnConnect: false,
+        generateHighQualityLinkPreview: false,
+        defaultQueryTimeoutMs: 60000,
     });
 
     if (cleanNumber) {
@@ -89,59 +90,11 @@ async function startBot(number, credsData = null) {
     }
     socketStartTimes.set(cleanNumber || 'default', Date.now());
 
+    // ============ CONNECTION UPDATE ============
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-       
-       /* if (connection === 'open') {
-    console.log(`✅ Bot connected successfully!`);
-    botNumber = sock.user.id.split(':')[0];
-    console.log(`📱 Bot Number: ${botNumber}`);
-
-    await saveCreds();
-    const savedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
-
-    if (cleanNumber) {
-        await saveCredsToDB(cleanNumber, savedCreds, true);
-        await updateSessionActive(cleanNumber, true);
-    }
-
-    // ✅ ADD THIS: Send success message to bot's own number
-    try {
-        const botJid = sock.user.id; // botගේ JID එක: 94778321651@s.whatsapp.net
-        await sock.sendMessage(botJid, {
-            text: `╭───❍ 《 ${config.BOT_NAME} 》
-│ ✅ Successfully Connected!
-│ 🤖 Number: ${botNumber}
-│ ⏱️ Time: ${getTimestamp()}
-│ 🟢 Status: Online & Ready
-╰───❍
-
-Type ${config.PREFIX}menu to see commands.`
-        });
-        console.log(`✅ Success message sent to ${botNumber}`);
-    } catch (e) {
-        console.log('Could not send startup message to self:', e.message);
-    }
-
-    // Ownerට යවන එක තියෙනවා නම් ඒකත් තියන්න
-    const ownerJid = formatJid(config.OWNER_NUMBER);
-    try {
-        await sock.sendMessage(ownerJid, {
-            text: `╭───❍ 《 ${config.BOT_NAME} ONLINE 》
-│ 🤖 Status: Connected
-│ 📱 Number: ${botNumber}
-│ ⏱️ Time: ${getTimestamp()}
-╰───❍`
-        });
-    } catch (e) {
-        console.log('Could not send startup message to owner');
-    }
-}*/
-        
-        
-         
-           if (connection === 'open') {
+        if (connection === 'open') {
             console.log(`✅ Bot connected successfully!`);
             botNumber = sock.user.id.split(':')[0];
             console.log(`📱 Bot Number: ${botNumber}`);
@@ -154,17 +107,35 @@ Type ${config.PREFIX}menu to see commands.`
                 await updateSessionActive(cleanNumber, true);
             }
 
-            const ownerJid = formatJid(config.OWNER_NUMBER);
-            try {
-                await sock.sendMessage(ownerJid, {
-                    text: `╭───❍ 《 ${config.BOT_NAME} ONLINE 》
-│ 🤖 Status: Connected
-│ 📱 Number: ${botNumber}
+            const connectMsg = `╭───❍ 《 ${config.BOT_NAME} 》
+│ ✅ Successfully Connected!
+│ 🤖 Number: ${botNumber}
 │ ⏱️ Time: ${getTimestamp()}
-╰───❍`
-                });
+│ 🟢 Status: Online & Ready
+╰───❍
+
+Type ${config.PREFIX}menu to see commands.`;
+
+            // FIX: Send to bot's own number
+            try {
+                const botJid = sock.user.id;
+                await delay(1000); // Wait 1s before sending
+                await sock.sendMessage(botJid, { text: connectMsg });
+                console.log(`✅ Success message sent to self: ${botNumber}`);
             } catch (e) {
-                console.log('Could not send startup message to owner');
+                console.log('Could not send startup message to self:', e.message);
+            }
+
+            // FIX: Send to owner number
+            if (config.OWNER_NUMBER && config.OWNER_NUMBER!== botNumber) {
+                try {
+                    const ownerJid = formatJid(config.OWNER_NUMBER);
+                    await delay(500);
+                    await sock.sendMessage(ownerJid, { text: connectMsg });
+                    console.log(`✅ Success message sent to owner: ${config.OWNER_NUMBER}`);
+                } catch (e) {
+                    console.log('Could not send startup message to owner:', e.message);
+                }
             }
         }
 
@@ -172,17 +143,55 @@ Type ${config.PREFIX}menu to see commands.`
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             console.log(`Connection closed with code: ${statusCode}`);
 
-            if (statusCode!== DisconnectReason.loggedOut) {
-                console.log('Reconnecting...');
-                setTimeout(() => {
-                    startBot(cleanNumber);
-                }, 5000);
-            } else {
-                console.log('Logged out, cleaning up session');
+            // FIX: Logout from WhatsApp - Remove from MongoDB
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.log('🚪 User logged out from WhatsApp');
+
                 if (cleanNumber) {
-                    await updateSessionActive(cleanNumber, false);
                     activeSockets.delete(cleanNumber);
+                    socketStartTimes.delete(cleanNumber);
+
+                    try {
+                        await removeSession(cleanNumber); // MongoDB එකෙන් delete
+                        await updateSessionActive(cleanNumber, false);
+                        console.log(`🗑️ Removed session from DB: ${cleanNumber}`);
+                    } catch (e) {
+                        console.error('Error removing session from DB:', e.message);
+                    }
+
+                    try {
+                        await fs.remove(sessionPath);
+                        console.log(`🗑️ Deleted local session: ${cleanNumber}`);
+                    } catch (e) {
+                        console.error('Error deleting session folder:', e.message);
+                    }
+
+                    console.log(`✅ Session ${cleanNumber} cleaned up completely`);
                 }
+                return; // Reconnect වෙන්නේ නෑ
+
+            } else if (statusCode === DisconnectReason.badSession) {
+                console.log('⚠️ Bad session detected. Deleting and restarting...');
+                if (cleanNumber) {
+                    activeSockets.delete(cleanNumber);
+                    await removeSession(cleanNumber);
+                    try { await fs.remove(sessionPath); } catch (e) {}
+                }
+                setTimeout(() => startBot(cleanNumber), 3000);
+
+            } else if (statusCode === DisconnectReason.restartRequired) {
+                console.log('Restart required, reconnecting...');
+                setTimeout(() => startBot(cleanNumber), 1000);
+
+            } else if (statusCode === DisconnectReason.connectionClosed ||
+                       statusCode === DisconnectReason.connectionLost ||
+                       statusCode === DisconnectReason.connectionReplaced) {
+                console.log('Connection lost, reconnecting in 5s...');
+                setTimeout(() => startBot(cleanNumber), 5000);
+
+            } else {
+                console.log(`Unknown disconnect reason: ${statusCode}, reconnecting...`);
+                setTimeout(() => startBot(cleanNumber), 5000);
             }
         }
     });
@@ -407,7 +416,7 @@ app.post('/api/pair/code', async (req, res) => {
             await fs.ensureDir(sessionPath);
 
             const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-            const { version } = await fetchLatestBaileysVersion(); // FIX: Now imported
+            const { version } = await fetchLatestBaileysVersion();
 
             if (currentSocket) {
                 try {
@@ -424,7 +433,7 @@ app.post('/api/pair/code', async (req, res) => {
                 },
                 printQRInTerminal: false,
                 logger: pino({ level: "silent" }),
-                browser: Browsers.macOS('Chrome'),
+                browser: Browsers.ubuntu('Chrome'), // FIX: ubuntu for better pair code
                 markOnlineOnConnect: false,
                 generateHighQualityLinkPreview: false,
                 defaultQueryTimeoutMs: 60000,
@@ -452,8 +461,7 @@ app.post('/api/pair/code', async (req, res) => {
                         const permPath = path.join(SESSION_BASE_PATH, `session_${cleanNumber}`);
                         await fs.copy(sessionPath, permPath);
                         await saveCredsToDB(cleanNumber, creds, true);
-                       // await startBot(cleanNumber, creds);
-
+                        // FIX: Don't call startBot here, let autoReconnect handle it
                         console.log(`✅ Bot connected: ${cleanNumber}`);
                     } catch (err) {
                         console.error('Error saving session:', err);
@@ -560,7 +568,7 @@ app.get('/api/generate-qr', async (req, res) => {
         auth: state,
         printQRInTerminal: false,
         logger,
-        browser: Browsers.macOS('Chrome'),
+        browser: Browsers.ubuntu('Chrome'),
         markOnlineOnConnect: false
     });
 
@@ -570,7 +578,7 @@ app.get('/api/generate-qr', async (req, res) => {
         if (qr &&!qrSent &&!responded) {
             qrSent = true;
             responded = true;
-            const qrBase64 = await QRCode.toDataURL(qr); // FIX: QRCode now imported
+            const qrBase64 = await QRCode.toDataURL(qr);
             res.json({ qr: qrBase64, status: 'qr' });
 
             setTimeout(() => {
@@ -603,7 +611,7 @@ app.get('/api/generate-qr', async (req, res) => {
 });
 
 app.get('/api/qr-status', (req, res) => {
-    res.json({ connected: false }); // qrConnected variable එක define වෙලා නෑ, ඒ නිසා false දානවා
+    res.json({ connected: false });
 });
 
 // ============ AUTO RECONNECT ============
@@ -645,7 +653,8 @@ async function main() {
     `);
 }
 
-process.on('SIGINT', asy-nc () => {
+// FIX: Fixed typo - async not asy-nc
+process.on('SIGINT', async () => {
     console.log('Shutting down...');
     for (const [number, sock] of activeSockets) {
         try { sock.end(new Error('Shutdown')); } catch (e) {}
@@ -655,6 +664,10 @@ process.on('SIGINT', asy-nc () => {
 
 process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (err) => {
+    console.error('Unhandled Rejection:', err);
 });
 
 main();
