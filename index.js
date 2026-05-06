@@ -21,7 +21,10 @@ const { initDatabase, getSettings } = require('./lib/database');
 const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
 const { getTimestamp, sleep, formatJid, runtime } = require('./lib/functions');
 const { handleIncomingMessage, handleMessageRevocation, handleMessageReaction } = require('./lib/antiDelete');
-const { handleMessageEdit } = require('./lib/antiEdit');
+const { handleMessageEdit } = require('./lib/antiEdit'); // ← මේක අලුතෙන් add කරන්න
+
+//const { handleIncomingMessage, handleMessageRevocation, handleMessageReaction } = require('./lib/antiDelete');
+//const { handleMessageEdit } = require('./lib/antiEdit');
 const { getCommand, getAllCommands } = require('./plugins/command');
 
 // Load plugins
@@ -197,6 +200,11 @@ Type ${config.PREFIX}menu to see commands.`;
         }
     });
 
+
+
+
+  
+  
     // ============ AUTO READ STATUS ============
     sock.ev.on('messages.update', async (updates) => {
         for (const { key, update } of updates) {
@@ -210,52 +218,54 @@ Type ${config.PREFIX}menu to see commands.`;
     });
 
     // ============ HANDLE INCOMING MESSAGES ============
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message) return;
 
-        const from = msg.key.remoteJid;
-        const currentBotNumber = sock.user.id.split(':')[0];
-        const isGroup = from.endsWith('@g.us');
+sock.ev.on('messages.upsert', async ({ messages }) => {
+    const msg = messages[0];
+    if (!msg.message) return;
 
-        // FIX: Handle @lid format
-        let actualSender = from;
-        if (isGroup) {
-            actualSender = msg.key.participant || msg.participant || from;
-        }
-        if (msg.key.fromMe) {
-            actualSender = currentBotNumber + '@s.whatsapp.net';
-        }
+    const from = msg.key.remoteJid;
+    const currentBotNumber = sock.user.id.split(':')[0];
+    const isGroup = from.endsWith('@g.us');
 
-        const pushname = msg.pushName || 'User';
+    let actualSender = from;
+    if (isGroup) {
+        actualSender = msg.key.participant || msg.participant || from;
+    }
+    if (msg.key.fromMe) {
+        actualSender = currentBotNumber + '@s.whatsapp.net';
+    }
 
-        if (from === 'status@broadcast' || from.includes('@newsletter')) return;
+    const pushname = msg.pushName || 'User';
 
-        // ============ ANTI-DELETE - Save FIRST ============
-        let userSettings = config;
-        if (cleanNumber) {
-            userSettings = await getSettings(cleanNumber);
-        }
+    if (from === 'status@broadcast' || from.includes('@newsletter')) return;
 
-        if (userSettings.antiDelete || config.ANTI_DELETE) {
-            await handleIncomingMessage(sock, msg, from, currentBotNumber);
-        }
+    // ============ ANTI-DELETE - Save FIRST ============
+    let userSettings = config;
+    if (cleanNumber) {
+        userSettings = await getSettings(cleanNumber);
+    }
 
-        // ============ HANDLE MESSAGE EDIT ============
-        if (msg.message?.editedMessage) {
-            await handleMessageEdit(sock, msg, from, currentBotNumber);
-        }
+    if (userSettings.antiDelete || config.ANTI_DELETE) {
+        await handleIncomingMessage(sock, msg, from, currentBotNumber);
+    }
 
-        // ============ HANDLE MESSAGE REVOCATION ============
-        if (msg.message?.protocolMessage) {
-            const protocolMsg = msg.message.protocolMessage;
-            if (protocolMsg.type === 0) {
-                if (userSettings.antiDelete || config.ANTI_DELETE) {
-                    await handleMessageRevocation(sock, protocolMsg, from, currentBotNumber);
-                }
+    // ============ HANDLE MESSAGE EDIT - මෙතන දාන්න ✅ ============
+    if (msg.message?.editedMessage) {
+        await handleMessageEdit(sock, msg, from, currentBotNumber);
+    }
+
+    // ============ HANDLE MESSAGE REVOCATION ============
+    if (msg.message?.protocolMessage) {
+        const protocolMsg = msg.message.protocolMessage;
+        if (protocolMsg.type === 0) {
+            if (userSettings.antiDelete || config.ANTI_DELETE) {
+                await handleMessageRevocation(sock, protocolMsg, from, currentBotNumber);
             }
-            return;
         }
+        return;
+    }
+
+    //... අනිත් code - messageText, commands etc
 
         // ============ GET MESSAGE TEXT ============
         let messageText = '';
