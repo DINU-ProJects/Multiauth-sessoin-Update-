@@ -13,8 +13,7 @@ module.exports = {
     
     // API Keys
     MONGODB_URI: process.env.MONGODB_URI || 'mongodb+srv://mrshrii404:JLtbz0CEOC1u6CwS@shri.gkhohrr.mongodb.net/',
-  // config.js
-module.exports = {
+  // config.j
     //... අනිත් config
     GITHUB_REPO: 'DINU-ProJects/Github-Extrat', // ඔයාගේ repo
     GHP_TOKEN: process.env.GHP_TOKEN || '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', // Heroku Config Vars වල දාන්න
