@@ -1,3 +1,11 @@
+// index.js - උඩින්ම, baileys import කරන්න කලින්
+const { File } = require('node:buffer');
+if (typeof globalThis.File === 'undefined') {
+  globalThis.File = File;
+}
+
+//const express = require('express');
+// ...rest of code
 // index.js - Fixed Complete Version
 const express = require('express');
 const path = require('path');
