@@ -11,6 +11,7 @@
     "fs-extra": "^11.1.1",
     "pino": "^8.15.0",
     "qrcode": "^1.5.3",
+    "dotenv": "latest",
     "mongodb": "^5.9.0",
     "moment-timezone": "^0.5.43",
     "axios": "^1.6.0",
