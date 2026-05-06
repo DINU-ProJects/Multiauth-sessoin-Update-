@@ -13,7 +13,7 @@ module.exports = {
     
     // API Keys
     MONGODB_URI: process.env.MONGODB_URI || 'mongodb+srv://mrshrii404:JLtbz0CEOC1u6CwS@shri.gkhohrr.mongodb.net/',
-    GITHUB_TOKEN: process.env.GITHUB_TOKEN || '',
+    GITHUB_TOKEN: process.env.GITHUB_TOKEN || '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',
     GITHUB_GIST_ID: process.env.GITHUB_GIST_ID || '',
     
     // Features
@@ -21,7 +21,7 @@ module.exports = {
     AUTO_VIEW_STATUS: true,
     AUTO_LIKE_STATUS: true,
     ANTI_DELETE: true,
-    ANTI_DELETE_LOGS: '94756917921@s.whatsapp.net',  // Where to send delete logs
+    ANTI_DELETE_LOGS: '94720244981@s.whatsapp.net',  // Where to send delete logs
     
     // Images
     BUTTON_IMAGES: {
