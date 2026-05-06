@@ -20,6 +20,6 @@
     "awesome-phonenumber": "^6.0.0"
   },
   "engines": {
-    "node": "16.20.2"
+    "node": "18.x"
   }
 }
