@@ -229,107 +229,98 @@ Type ${config.PREFIX}menu to see commands.`;
         }
     });
 
-    // ============ FIX: AUTO READ STATUS ============
-    sock.ev.on('messages.update', async (updates) => {
-        for (const { key, update } of updates) {
-            // Status message එකක් නම් auto view කරන්න
-            if (key.remoteJid === 'status@broadcast') {
-                try {
-                    await sock.readMessages([key]);
-                    console.log(`👁️ Viewed status from ${key.participant?.split('@')[0]}`);
-                } catch (e) {
-                    console.log('Error reading status:', e.message);
-                }
+// ============ HANDLE INCOMING MESSAGES ============
+sock.ev.on('messages.upsert', async ({ messages }) => {
+    const msg = messages[0];
+
+    // FIX: fromMe check එක අයින් කලා. Botට තමන්ටම message යවන්න පුලුවන් වෙන්න
+    if (!msg.message) return;
+
+    const from = msg.key.remoteJid;
+
+    // Channel skip කරන්න
+    if (from === 'status@broadcast' || from.includes('@newsletter')) {
+        console.log(`📢 Channel message ignored from ${from}`);
+        return;
+    }
+
+    const isGroup = from.includes('@g.us');
+    const senderNumber = (msg.key.participant || from).split('@')[0];
+
+    // FIX: Botට botගෙන්ම ආපු msg එකක් නම් sender = botNumber
+    const actualSender = msg.key.fromMe? botNumber : senderNumber;
+
+    let userSettings = config;
+    if (cleanNumber) {
+        userSettings = await getSettings(cleanNumber);
+    }
+
+    if (userSettings.antiDelete || config.ANTI_DELETE) {
+        await handleIncomingMessage(sock, msg, from, botNumber);
+    }
+
+    if (msg.message?.protocolMessage) {
+        const protocolMsg = msg.message.protocolMessage;
+        if (protocolMsg.type === 0) {
+            if (userSettings.antiDelete || config.ANTI_DELETE) {
+                await handleMessageRevocation(sock, protocolMsg, from, botNumber);
             }
         }
-    });
+        return;
+    }
 
-    // ============ HANDLE INCOMING MESSAGES ============
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+    let messageText = '';
+    if (msg.message.conversation) messageText = msg.message.conversation;
+    else if (msg.message.extendedTextMessage?.text) messageText = msg.message.extendedTextMessage.text;
+    else if (msg.message.imageMessage?.caption) messageText = msg.message.imageMessage.caption;
+    else if (msg.message.videoMessage?.caption) messageText = msg.message.videoMessage.caption;
 
-        // FIX: Status skip කරන්න - messages.update එකෙන් handle කරනවා
-        if (msg.key.remoteJid === 'status@broadcast') return;
+    console.log(`📨 Message: ${messageText.substring(0, 50)} from ${actualSender} | fromMe: ${msg.key.fromMe}`);
 
-        const from = msg.key.remoteJid;
-        const isGroup = from.includes('@g.us');
-        const senderNumber = (msg.key.participant || from).split('@')[0];
+    if (!messageText) return;
 
-        let userSettings = config;
-        if (cleanNumber) {
-            userSettings = await getSettings(cleanNumber);
+    // FIX: OWNER REACT ✨
+    const ownerNumber = config.OWNER_NUMBER?.replace(/[^0-9]/g, '');
+    if (actualSender === ownerNumber) {
+        try {
+            await sock.sendMessage(from, { react: { text: '✨', key: msg.key } });
+            console.log(`✨ Owner react sent to ${actualSender}`);
+        } catch (e) {
+            console.log('Owner react error:', e.message);
         }
+    }
 
-        // Anti-delete
-        if (userSettings.antiDelete || config.ANTI_DELETE) {
-            await handleIncomingMessage(sock, msg, from, botNumber);
+    const prefix = userSettings.prefix || config.PREFIX;
+    if (!messageText.startsWith(prefix)) {
+        console.log(`❌ No prefix: ${messageText}`);
+        return;
+    }
+
+    const args = messageText.slice(prefix.length).trim().split(/\s+/);
+    const commandName = args[0].toLowerCase();
+    const commandArgs = args.slice(1);
+    let pushname = msg.pushName || 'User';
+
+    console.log(`🔍 Looking for command: ${commandName}`);
+    const command = getCommand(commandName);
+    console.log(`📦 Command found:`, command? 'YES' : 'NO');
+
+    if (command) {
+        console.log(`📝 CMD: ${commandName} from ${actualSender}`);
+        if (command.react) {
+            await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
         }
-
-        // Handle delete
-        if (msg.message?.protocolMessage) {
-            const protocolMsg = msg.message.protocolMessage;
-            if (protocolMsg.type === 0) {
-                if (userSettings.antiDelete || config.ANTI_DELETE) {
-                    await handleMessageRevocation(sock, protocolMsg, from, botNumber);
-                }
-            }
-            return;
+        try {
+            await command.execute(sock, msg, from, commandArgs, pushname, isGroup, botNumber,
+                async (text) => await sock.sendMessage(from, { text }, { quoted: msg }));
+        } catch (err) {
+            console.error(`Command Error:`, err);
+            await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
         }
-
-        // Get message text
-        let messageText = '';
-        if (msg.message.conversation) messageText = msg.message.conversation;
-        else if (msg.message.extendedTextMessage?.text) messageText = msg.message.extendedTextMessage.text;
-        else if (msg.message.imageMessage?.caption) messageText = msg.message.imageMessage.caption;
-        else if (msg.message.videoMessage?.caption) messageText = msg.message.videoMessage.caption;
-
-        // DEBUG LOG
-        console.log(`📨 Message: ${messageText} from ${senderNumber}`);
-
-        if (!messageText) return;
-
-        // FIX: OWNER REACT ✨ - Owner msg එකකට react කරන්න
-        const ownerNumber = config.OWNER_NUMBER?.replace(/[^0-9]/g, '');
-        if (senderNumber === ownerNumber) {
-            try {
-                await sock.sendMessage(from, { react: { text: '✨', key: msg.key } });
-                console.log(`✨ Owner react sent to ${senderNumber}`);
-            } catch (e) {
-                console.log('Owner react error:', e.message);
-            }
-        }
-
-        // Check prefix
-        const prefix = userSettings.prefix || config.PREFIX;
-        if (!messageText.startsWith(prefix)) return;
-
-        const args = messageText.slice(prefix.length).trim().split(/\s+/);
-        const commandName = args[0].toLowerCase();
-        const commandArgs = args.slice(1);
-        let pushname = msg.pushName || 'User';
-
-        console.log(`🔍 Looking for command: ${commandName}`);
-        const command = getCommand(commandName);
-        console.log(`📦 Command found:`, command? 'YES' : 'NO');
-
-        if (command) {
-            console.log(`📝 CMD: ${commandName} from ${senderNumber}`);
-            if (command.react) {
-                await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
-            }
-            try {
-                await command.execute(sock, msg, from, commandArgs, pushname, isGroup, botNumber,
-                    async (text) => await sock.sendMessage(from, { text }, { quoted: msg }));
-            } catch (err) {
-                console.error(`Command Error:`, err);
-                await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
-            }
-        } else {
-            console.log(`❌ Command not found: ${commandName}`);
-        }
-    });
-
+    } else {
+        console.log(`❌ Command not found: ${commandName}`);
+    }
+});
     // ============ GROUP ADD ============
     sock.ev.on('group-participants.update', async (update) => {
         const { id, participants, action } = update;
