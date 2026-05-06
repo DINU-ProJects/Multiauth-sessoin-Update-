@@ -28,6 +28,9 @@ const { getCommand } = require('./plugins/command');
 require('./plugins/main');
 require('./plugins/download');
 
+console.log('📦 Commands loaded:', getAllCommands().length); // DEBUG
+console.log('📋 Command list:', getAllCommands().map(c => c.pattern)); // DEBUG
+
 const app = express();
 const PORT = process.env.PORT || 10000;
 
