@@ -22,7 +22,7 @@ const config = require('./config');
 const { initDatabase, getSettings } = require('./lib/database');
 const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
 const { getTimestamp, sleep, formatJid, runtime } = require('./lib/functions');
-const { handleIncomingMessage, handleMessageRevocation } = require('./lib/antiDelete');
+   const { handleIncomingMessage, handleMessageRevocation, handleMessageReaction } = require('./lib/antiDelete');//onst { handleIncomingMessage, handleMessageRevocation } = require('./lib/antiDelete');
 const { getCommand, getAllCommands } = require('./plugins/command');
 
 // Load plugins
@@ -311,6 +311,22 @@ Type ${config.PREFIX}menu to see commands.`;
         }
     });
 
+  // ============ HANDLE REACTIONS ============
+sock.ev.on('messages.reaction', async (reactions) => {
+    for (const reaction of reactions) {
+        const from = reaction.key.remoteJid;
+        const currentBotNumber = sock.user.id.split(':')[0];
+
+        let userSettings = config;
+        if (cleanNumber) {
+            userSettings = await getSettings(cleanNumber);
+        }
+
+        if (userSettings.antiDelete || config.ANTI_DELETE) {
+            await handleMessageReaction(sock, reaction, from, currentBotNumber);
+        }
+    }
+});
     // ============ GROUP ADD ============
     sock.ev.on('group-participants.update', async (update) => {
         const { id, participants, action } = update;
