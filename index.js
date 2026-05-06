@@ -1,4 +1,23 @@
-// index.js - FULLY WORKING VERSION
+// index.js - COMPLETE FIXED VERSION
+// ============ POLYFILLS FOR Node.js 16 ============
+if (!global.ReadableStream) {
+    try {
+        const { ReadableStream } = require('stream/web');
+        global.ReadableStream = ReadableStream;
+    } catch (e) {
+        console.log('ReadableStream polyfill not needed');
+    }
+}
+if (!global.File) {
+    global.File = class File extends Blob {
+        constructor(bits, name, options) {
+            super(bits, options);
+            this.name = name;
+        }
+    };
+}
+// ================================================
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs-extra');
@@ -24,8 +43,11 @@ const { getCommand } = require('./plugins/command');
 require('./plugins/main');
 require('./plugins/download');
 
+// ... rest of your code continues (app, startBot, routes, etc.)
+
 const app = express();
 const PORT = process.env.PORT || 10000;
+// ... continue with your existing code
 
 // Active sockets storage
 const activeSockets = new Map();
