@@ -280,104 +280,275 @@ app.delete('/api/session/:number', async (req, res) => {
 });
 
 // ============ PAIR WITH CODE (8-DIGIT) ============
+// ============ WORKING PAIR FUNCTION - Copy paste to index.js ============
+
+// Pair with Code (8-digit code) - FULLY WORKING
 app.post('/api/pair/code', async (req, res) => {
     const { number } = req.body;
-    if (!number) return res.status(400).json({ error: 'Number required' });
     
-    const cleanNumber = number.replace(/[^0-9]/g, '');
-    const existing = activeSockets.has(cleanNumber);
-    if (existing) return res.json({ status: 'already_paired', message: 'Already connected' });
+    if (!number) {
+        return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    // Clean number
+    let cleanNumber = number.toString().replace(/[^0-9]/g, '');
+    if (cleanNumber.length < 10) {
+        return res.status(400).json({ error: 'Invalid phone number' });
+    }
+
+    // Remove country code if present
+    if (cleanNumber.startsWith('0')) {
+        cleanNumber = '94' + cleanNumber.substring(1);
+    }
+    if (!cleanNumber.startsWith('94')) {
+        cleanNumber = '94' + cleanNumber;
+    }
+
+    const sessionId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
+    const sessionPath = path.join(SESSION_BASE_PATH, `pair_${sessionId}`);
     
-    const sessionPath = path.join(SESSION_BASE_PATH, `session_${cleanNumber}`);
+    let pairingCodeSent = false;
+    let sessionCompleted = false;
+    let responseSent = false;
+    let reconnectAttempts = 0;
+    let currentSocket = null;
+    let timeoutHandle = null;
+    let isCleaningUp = false;
+
+    async function cleanup(reason = 'unknown') {
+        if (isCleaningUp) return;
+        isCleaningUp = true;
+        console.log(`🧹 Cleanup pair session ${sessionId} - ${reason}`);
+        
+        if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = null;
+        }
+        
+        if (currentSocket) {
+            try {
+                currentSocket.ev.removeAllListeners();
+                await currentSocket.end();
+            } catch (e) {}
+            currentSocket = null;
+        }
+        
+        setTimeout(async () => {
+            try {
+                await fs.remove(sessionPath);
+            } catch (e) {}
+        }, 5000);
+    }
+
+    async function initiateSession() {
+        if (sessionCompleted || isCleaningUp) return;
+        
+        if (reconnectAttempts >= 3) {
+            if (!responseSent && !res.headersSent) {
+                responseSent = true;
+                res.status(503).json({ error: 'Connection failed after multiple attempts' });
+            }
+            await cleanup('max_reconnects');
+            return;
+        }
+        
+        try {
+            await fs.ensureDir(sessionPath);
+            
+            const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+            const { version } = await fetchLatestBaileysVersion();
+            
+            if (currentSocket) {
+                try {
+                    currentSocket.ev.removeAllListeners();
+                    await currentSocket.end();
+                } catch (e) {}
+            }
+            
+            const sock = makeWASocket({
+                version,
+                auth: {
+                    creds: state.creds,
+                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" }))
+                },
+                printQRInTerminal: false,
+                logger: pino({ level: "silent" }),
+                browser: Browsers.macOS('Chrome'),
+                markOnlineOnConnect: false,
+                generateHighQualityLinkPreview: false,
+                defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 60000,
+                keepAliveIntervalMs: 30000,
+                retryRequestDelayMs: 250,
+                maxRetries: 3,
+            });
+            
+            currentSocket = sock;
+            
+            sock.ev.on('connection.update', async (update) => {
+                if (isCleaningUp) return;
+                const { connection, lastDisconnect, isNewLogin } = update;
+                
+                if (connection === 'open') {
+                    if (sessionCompleted) return;
+                    sessionCompleted = true;
+                    console.log(`✅ Pairing successful for ${cleanNumber}`);
+                    
+                    try {
+                        await saveCreds();
+                        const creds = await fs.readJson(path.join(sessionPath, 'creds.json'));
+                        
+                        // Save to permanent session
+                        const permPath = path.join(SESSION_BASE_PATH, `session_${cleanNumber}`);
+                        await fs.copy(sessionPath, permPath);
+                        await saveCredsToDB(cleanNumber, creds, true);
+                        await startBot(cleanNumber, creds);
+                        
+                        console.log(`✅ Bot connected: ${cleanNumber}`);
+                    } catch (err) {
+                        console.error('Error saving session:', err);
+                    } finally {
+                        await cleanup('session_complete');
+                    }
+                }
+                
+                if (isNewLogin) {
+                    console.log(`🔐 New login via pair code for ${cleanNumber}`);
+                }
+                
+                if (connection === 'close') {
+                    if (sessionCompleted || isCleaningUp) {
+                        await cleanup('already_complete');
+                        return;
+                    }
+                    
+                    const statusCode = lastDisconnect?.error?.output?.statusCode;
+                    if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                        if (!responseSent && !res.headersSent) {
+                            responseSent = true;
+                            res.status(401).json({ error: 'Invalid pairing code or session expired' });
+                        }
+                        await cleanup('logged_out');
+                    } else if (pairingCodeSent && !sessionCompleted) {
+                        reconnectAttempts++;
+                        console.log(`🔄 Reconnect attempt ${reconnectAttempts}/3`);
+                        await delay(2000);
+                        await initiateSession();
+                    } else {
+                        await cleanup('connection_closed');
+                    }
+                }
+            });
+            
+            // Request pairing code
+            if (!sock.authState.creds.registered && !pairingCodeSent && !isCleaningUp) {
+                await delay(1500);
+                try {
+                    pairingCodeSent = true;
+                    let code = await sock.requestPairingCode(cleanNumber);
+                    code = code?.match(/.{1,4}/g)?.join('-') || code;
+                    
+                    if (!responseSent && !res.headersSent) {
+                        responseSent = true;
+                        res.json({ 
+                            status: 'success', 
+                            code: code,
+                            message: 'Use this 8-digit code in WhatsApp Linked Devices'
+                        });
+                        console.log(`📱 Pairing code sent for ${cleanNumber}: ${code}`);
+                    }
+                } catch (error) {
+                    console.error('Error requesting pairing code:', error);
+                    pairingCodeSent = false;
+                    if (!responseSent && !res.headersSent) {
+                        responseSent = true;
+                        res.status(503).json({ error: 'Failed to get pairing code: ' + error.message });
+                    }
+                    await cleanup('pairing_code_error');
+                }
+            }
+            
+            sock.ev.on('creds.update', saveCreds);
+            
+            timeoutHandle = setTimeout(async () => {
+                if (!sessionCompleted && !isCleaningUp) {
+                    console.log('⏰ Pairing timeout');
+                    if (!responseSent && !res.headersSent) {
+                        responseSent = true;
+                        res.status(408).json({ error: 'Pairing timeout - Please try again' });
+                    }
+                    await cleanup('timeout');
+                }
+            }, 60000);
+            
+        } catch (err) {
+            console.error(`❌ Error initializing session for ${cleanNumber}:`, err);
+            if (!responseSent && !res.headersSent) {
+                responseSent = true;
+                res.status(503).json({ error: 'Service Unavailable: ' + err.message });
+            }
+            await cleanup('init_error');
+        }
+    }
+    
+    await initiateSession();
+});
+// ============ GENERATE QR (NO NUMBER NEEDED) ============
+// QR Code Generation - Number එකක් නැතුව
+app.get('/api/generate-qr', async (req, res) => {
+    const sessionId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
+    const sessionPath = path.join(SESSION_BASE_PATH, `qr_${sessionId}`);
+    
     await fs.ensureDir(sessionPath);
     
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const logger = pino({ level: 'fatal' });
     
-    const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: false,
-        logger,
-        browser: Browsers.macOS('Safari')
-    });
-    
+    let qrSent = false;
     let responded = false;
     
-    sock.ev.on('connection.update', async (update) => {
-        const { connection } = update;
-        if (connection === 'open' && !responded) {
-            responded = true;
-            await saveCreds();
-            const creds = await fs.readJson(path.join(sessionPath, 'creds.json'));
-            await saveCredsToDB(cleanNumber, creds, true);
-            await startBot(cleanNumber, creds);
-        }
-    });
-    
-    setTimeout(async () => {
-        try {
-            const code = await sock.requestPairingCode(cleanNumber);
-            if (!responded) {
-                responded = true;
-                res.json({ code: code, status: 'success' });
-            }
-        } catch (error) {
-            if (!responded) {
-                responded = true;
-                res.status(500).json({ error: error.message });
-            }
-        }
-        setTimeout(() => { if (!responded) sock.end(new Error('Timeout')); }, 60000);
-    }, 2000);
-});
-
-// ============ GENERATE QR (NO NUMBER NEEDED) ============
-let currentQRSock = null;
-let qrConnected = false;
-
-app.get('/api/generate-qr', async (req, res) => {
-    const sessionPath = path.join(SESSION_BASE_PATH, `qr_${Date.now()}`);
-    await fs.ensureDir(sessionPath);
-    
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const logger = pino({ level: 'fatal' });
-    
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
         logger,
-        browser: Browsers.macOS('Safari')
+        browser: Browsers.macOS('Chrome'),
+        markOnlineOnConnect: false
     });
-    
-    currentQRSock = sock;
-    qrConnected = false;
     
     sock.ev.on('connection.update', async (update) => {
         const { connection, qr } = update;
         
-        if (qr) {
-            const qrBase64 = await qrcode.toDataURL(qr);
-            if (!res.headersSent) {
-                res.json({ qr: qrBase64, status: 'qr' });
-            }
+        if (qr && !qrSent && !responded) {
+            qrSent = true;
+            responded = true;
+            const qrBase64 = await QRCode.toDataURL(qr);
+            res.json({ qr: qrBase64, status: 'qr' });
+            
+            setTimeout(() => {
+                sock.end(new Error('Timeout'));
+                fs.remove(sessionPath);
+            }, 120000);
         }
         
         if (connection === 'open') {
             await saveCreds();
             const creds = await fs.readJson(path.join(sessionPath, 'creds.json'));
             const botNumber = sock.user.id.split(':')[0];
+            
             const permPath = path.join(SESSION_BASE_PATH, `session_${botNumber}`);
             await fs.copy(sessionPath, permPath);
             await fs.remove(sessionPath);
             await saveCredsToDB(botNumber, creds, true);
             await startBot(botNumber, creds);
-            qrConnected = true;
+            
+            console.log(`✅ Bot connected via QR: ${botNumber}`);
         }
     });
     
     setTimeout(() => {
-        if (!qrConnected && !res.headersSent) {
+        if (!qrSent && !responded) {
             res.status(504).json({ error: 'Timeout' });
+            sock.end(new Error('Timeout'));
         }
     }, 60000);
 });
