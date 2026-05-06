@@ -237,12 +237,13 @@ sock.ev.on('messages.upsert', async ({ messages }) => {
 
     const from = msg.key.remoteJid;
     const currentBotNumber = sock.user.id.split(':')[0];
+    const isGroup = from.endsWith('@g.us');
+    const actualSender = isGroup? msg.key.participant : from; // ← මේක දාන්න
+    const pushname = msg.pushName || 'Unknown';
 
-    if (from === 'status@broadcast' || from.includes('@newsletter')) {
-        return;
-    }
+    if (from === 'status@broadcast' || from.includes('@newsletter')) return;
 
-    // FIX: ANTI-DELETE - Save FIRST before anything else
+    // ANTI-DELETE - Save FIRST
     let userSettings = config;
     if (cleanNumber) {
         userSettings = await getSettings(cleanNumber);
@@ -251,6 +252,8 @@ sock.ev.on('messages.upsert', async ({ messages }) => {
     if (userSettings.antiDelete || config.ANTI_DELETE) {
         await handleIncomingMessage(sock, msg, from, currentBotNumber);
     }
+
+    
 
     //... ඊට පස්සේ command handling, auto react, etc
 
