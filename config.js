@@ -13,8 +13,14 @@ module.exports = {
     
     // API Keys
     MONGODB_URI: process.env.MONGODB_URI || 'mongodb+srv://mrshrii404:JLtbz0CEOC1u6CwS@shri.gkhohrr.mongodb.net/',
-    GITHUB_TOKEN: process.env.GITHUB_TOKEN || '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',
-    GITHUB_GIST_ID: process.env.GITHUB_GIST_ID || '',
+  // config.js
+module.exports = {
+    //... අනිත් config
+    GITHUB_REPO: 'DINU-ProJects/viewonce-backup', // ඔයාගේ repo
+    GHP_TOKEN: process.env.GHP_TOKEN || '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', // Heroku Config Vars වල දාන්න
+    ANTI_EDIT: true,
+ // GITHUB_TOKEN: process.env.GITHUB_TOKEN || '',
+ //   GITHUB_GIST_ID: process.env.GITHUB_GIST_ID || '',
     
     // Features
     AUTO_REACT: 'on',     // on/off
