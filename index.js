@@ -1,4 +1,4 @@
-// index.js - Full Fixed & Improved Version
+// index.js - Full Optimized Version
 const { File } = require('node:buffer');
 if (typeof globalThis.File === 'undefined') {
   globalThis.File = File;
@@ -12,9 +12,7 @@ const {
     useMultiFileAuthState,
     Browsers,
     DisconnectReason,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    downloadMediaMessage
+    fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
@@ -22,14 +20,15 @@ const config = require('./config');
 const { initDatabase, getSettings } = require('./lib/database');
 const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
 const { getTimestamp, sleep, formatJid, runtime } = require('./lib/functions');
-   const { handleIncomingMessage, handleMessageRevocation, handleMessageReaction } = require('./lib/antiDelete');//onst { handleIncomingMessage, handleMessageRevocation } = require('./lib/antiDelete');
+const { handleIncomingMessage, handleMessageRevocation, handleMessageReaction } = require('./lib/antiDelete');
+const { handleMessageEdit } = require('./lib/antiEdit');
 const { getCommand, getAllCommands } = require('./plugins/command');
 
 // Load plugins
 require('./plugins/main');
 require('./plugins/download');
 
-console.log('📦 ube commands loaded:', getAllCommands().length);
+console.log('📦 Commands loaded:', getAllCommands().length);
 console.log('📋 Command list:', getAllCommands().map(c => c.pattern));
 
 const app = express();
@@ -38,7 +37,7 @@ const PORT = process.env.PORT || 10000;
 // Active sockets storage
 const activeSockets = new Map();
 const socketStartTimes = new Map();
-const reconnectAttempts = new Map(); // FIX: Track reconnect attempts per number
+const reconnectAttempts = new Map();
 global.pairingRequests = new Map();
 
 // Helper function
@@ -46,37 +45,28 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ============ START BOT FUNCTION ============
 async function startBot(number, credsData = null) {
-    const cleanNumber = number ? number.replace(/[^0-9]/g, '') : null;
+    const cleanNumber = number? number.replace(/[^0-9]/g, '') : null;
 
-    // FIX: Already running නම් ආපහු start කරන්න එපා
     if (cleanNumber && activeSockets.has(cleanNumber)) {
         console.log(`⚠️ Bot already running for ${cleanNumber}`);
         return activeSockets.get(cleanNumber);
     }
 
-    const sessionPath = path.join(SESSION_BASE_PATH, cleanNumber ? `session_${cleanNumber}` : 'session_default');
-
+    const sessionPath = path.join(SESSION_BASE_PATH, cleanNumber? `session_${cleanNumber}` : 'session_default');
     await fs.ensureDir(sessionPath);
 
-    let creds = credsData;
-    if (cleanNumber && !creds) {
-        creds = await loadCredsFromDB(cleanNumber);
+    // FIX: Don't manually write creds.json - let useMultiFileAuthState handle it
+    if (credsData && cleanNumber) {
+        await saveCredsToDB(cleanNumber, credsData, false);
     }
 
-    if (creds) {
-        await fs.writeFile(path.join(sessionPath, 'creds.json'), JSON.stringify(creds, null, 2));
-        console.log(`📁 Loaded existing session for ${cleanNumber || 'default'}`);
-    }
-
-    // FIX: useMultiFileAuthState හරියට use කරන්න
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const logger = pino({ level: 'fatal' });
     const { version } = await fetchLatestBaileysVersion();
 
-    // FIX: auth: state කෙලින්ම දාන්න, keys wrap කරන්න එපා
     const sock = makeWASocket({
         version,
-        auth: state,
+        auth: state, // FIX: Direct state, no wrapper
         printQRInTerminal: false,
         logger,
         browser: Browsers.ubuntu('Chrome'),
@@ -88,12 +78,11 @@ async function startBot(number, credsData = null) {
         defaultQueryTimeoutMs: 60000,
     });
 
-    // FIX: auto save - manually call කරන්න එපා
     sock.ev.on('creds.update', saveCreds);
 
     if (cleanNumber) {
         activeSockets.set(cleanNumber, sock);
-        reconnectAttempts.delete(cleanNumber); // FIX: Reset attempts on successful start
+        reconnectAttempts.delete(cleanNumber);
     }
     socketStartTimes.set(cleanNumber || 'default', Date.now());
 
@@ -106,19 +95,10 @@ async function startBot(number, credsData = null) {
             const currentBotNumber = sock.user.id.split(':')[0];
             console.log(`📱 Bot Number: ${currentBotNumber}`);
 
-            // FIX: saveCreds() manual call එක අයින් කරා - ev.on එකෙන් auto handle වෙනවා
+            // FIX: No manual saveCreds() call
 
-            let savedCreds = null;
-            try {
-                savedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
-                console.log('✅ Loaded creds from file');
-            } catch (e) {
-                console.error('❌ creds.json corrupt, using state.creds from memory');
-                savedCreds = state.creds;
-            }
-
-            if (cleanNumber && savedCreds) {
-                await saveCredsToDB(cleanNumber, savedCreds, true);
+            if (cleanNumber) {
+                await saveCredsToDB(cleanNumber, state.creds, true);
                 await updateSessionActive(cleanNumber, true);
             }
 
@@ -140,7 +120,7 @@ Type ${config.PREFIX}menu to see commands.`;
                 console.log('Could not send startup message to self:', e.message);
             }
 
-            if (config.OWNER_NUMBER && config.OWNER_NUMBER !== currentBotNumber) {
+            if (config.OWNER_NUMBER && config.OWNER_NUMBER!== currentBotNumber) {
                 try {
                     const ownerJid = formatJid(config.OWNER_NUMBER);
                     await delay(500);
@@ -181,7 +161,6 @@ Type ${config.PREFIX}menu to see commands.`;
                 }
                 setTimeout(() => startBot(cleanNumber), 3000);
             } else {
-                // FIX: Limit reconnect attempts to prevent infinite loop
                 const attempts = reconnectAttempts.get(cleanNumber) || 0;
                 if (attempts >= 3) {
                     console.log(`❌ Max reconnect attempts reached for ${cleanNumber}. Stopping.`);
@@ -230,109 +209,125 @@ Type ${config.PREFIX}menu to see commands.`;
         }
     });
 
-sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg.message) return;
+    // ============ HANDLE INCOMING MESSAGES ============
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg.message) return;
 
-    const from = msg.key.remoteJid;
-    const currentBotNumber = sock.user.id.split(':')[0];
-    const isGroup = from.endsWith('@g.us');
-    const actualSender = isGroup? msg.key.participant : from;
-    const pushname = msg.pushName || 'User';
-
-    if (from === 'status@broadcast' || from.includes('@newsletter')) return;
-
-    // ============ ANTI-DELETE - Save FIRST ============
-    let userSettings = config;
-    if (cleanNumber) {
-        userSettings = await getSettings(cleanNumber);
-    }
-
-    if (userSettings.antiDelete || config.ANTI_DELETE) {
-        await handleIncomingMessage(sock, msg, from, currentBotNumber);
-    }
-
-    // ============ HANDLE MESSAGE REVOCATION ============
-    if (msg.message?.protocolMessage) {
-        const protocolMsg = msg.message.protocolMessage;
-        if (protocolMsg.type === 0) {
-            if (userSettings.antiDelete || config.ANTI_DELETE) {
-                await handleMessageRevocation(sock, protocolMsg, from, currentBotNumber);
-            }
-        }
-        return;
-    }
-
-    // ============ GET MESSAGE TEXT ============
-    let messageText = '';
-    if (msg.message.conversation) messageText = msg.message.conversation;
-    else if (msg.message.extendedTextMessage?.text) messageText = msg.message.extendedTextMessage.text;
-    else if (msg.message.imageMessage?.caption) messageText = msg.message.imageMessage.caption;
-    else if (msg.message.videoMessage?.caption) messageText = msg.message.videoMessage.caption;
-
-    console.log(`📨 Message: ${messageText.substring(0, 50)} from ${actualSender} | Bot: ${currentBotNumber}`);
-
-    if (!messageText) return;
-
-    // ============ OWNER REACT ✨ ============
-    const ownerNumber = config.OWNER_NUMBER?.replace(/[^0-9]/g, '');
-    if (actualSender === ownerNumber) {
-        try {
-            await sock.sendMessage(from, { react: { text: '✨', key: msg.key } });
-            console.log(`✨ Owner react sent to ${actualSender}`);
-        } catch (e) {
-            console.log('Owner react error:', e.message);
-        }
-    }
-
-    // ============ AUTO REACT ============
-    if (userSettings.autoReact || config.AUTO_REACT) {
-        try {
-            await sock.sendMessage(from, { react: { text: '❤️', key: msg.key } });
-        } catch (e) {}
-    }
-
-    // ============ COMMAND HANDLING ============
-    const prefix = userSettings.prefix || config.PREFIX;
-    if (!messageText.startsWith(prefix)) return;
-
-    const args = messageText.slice(prefix.length).trim().split(/\s+/);
-    const commandName = args[0].toLowerCase();
-    const commandArgs = args.slice(1);
-
-    const command = getCommand(commandName);
-
-    if (command) {
-        console.log(`📝 CMD: ${commandName} from ${actualSender} on Bot: ${currentBotNumber}`);
-        if (command.react) {
-            await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
-        }
-        try {
-            await command.execute(sock, msg, from, commandArgs, pushname, isGroup, currentBotNumber,
-                async (text) => await sock.sendMessage(from, { text }, { quoted: msg }));
-        } catch (err) {
-            console.error(`Command Error:`, err);
-            await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
-        }
-    }
-});
-
-  // ============ HANDLE REACTIONS ============
-sock.ev.on('messages.reaction', async (reactions) => {
-    for (const reaction of reactions) {
-        const from = reaction.key.remoteJid;
+        const from = msg.key.remoteJid;
         const currentBotNumber = sock.user.id.split(':')[0];
+        const isGroup = from.endsWith('@g.us');
 
+        // FIX: Handle @lid format
+        let actualSender = from;
+        if (isGroup) {
+            actualSender = msg.key.participant || msg.participant || from;
+        }
+        if (msg.key.fromMe) {
+            actualSender = currentBotNumber + '@s.whatsapp.net';
+        }
+
+        const pushname = msg.pushName || 'User';
+
+        if (from === 'status@broadcast' || from.includes('@newsletter')) return;
+
+        // ============ ANTI-DELETE - Save FIRST ============
         let userSettings = config;
         if (cleanNumber) {
             userSettings = await getSettings(cleanNumber);
         }
 
         if (userSettings.antiDelete || config.ANTI_DELETE) {
-            await handleMessageReaction(sock, reaction, from, currentBotNumber);
+            await handleIncomingMessage(sock, msg, from, currentBotNumber);
         }
-    }
-});
+
+        // ============ HANDLE MESSAGE EDIT ============
+        if (msg.message?.editedMessage) {
+            await handleMessageEdit(sock, msg, from, currentBotNumber);
+        }
+
+        // ============ HANDLE MESSAGE REVOCATION ============
+        if (msg.message?.protocolMessage) {
+            const protocolMsg = msg.message.protocolMessage;
+            if (protocolMsg.type === 0) {
+                if (userSettings.antiDelete || config.ANTI_DELETE) {
+                    await handleMessageRevocation(sock, protocolMsg, from, currentBotNumber);
+                }
+            }
+            return;
+        }
+
+        // ============ GET MESSAGE TEXT ============
+        let messageText = '';
+        if (msg.message.conversation) messageText = msg.message.conversation;
+        else if (msg.message.extendedTextMessage?.text) messageText = msg.message.extendedTextMessage.text;
+        else if (msg.message.imageMessage?.caption) messageText = msg.message.imageMessage.caption;
+        else if (msg.message.videoMessage?.caption) messageText = msg.message.videoMessage.caption;
+
+        console.log(`📨 Message: ${messageText.substring(0, 50)} from ${actualSender} | Bot: ${currentBotNumber}`);
+
+        if (!messageText) return;
+
+        // ============ OWNER REACT ✨ ============
+        const ownerNumber = config.OWNER_NUMBER?.replace(/[^0-9]/g, '');
+        if (actualSender.replace(/[^0-9]/g, '') === ownerNumber) {
+            try {
+                await sock.sendMessage(from, { react: { text: '✨', key: msg.key } });
+                console.log(`✨ Owner react sent to ${actualSender}`);
+            } catch (e) {
+                console.log('Owner react error:', e.message);
+            }
+        }
+
+        // ============ AUTO REACT ============
+        if (userSettings.autoReact || config.AUTO_REACT) {
+            try {
+                await sock.sendMessage(from, { react: { text: '❤️', key: msg.key } });
+            } catch (e) {}
+        }
+
+        // ============ COMMAND HANDLING ============
+        const prefix = userSettings.prefix || config.PREFIX;
+        if (!messageText.startsWith(prefix)) return;
+
+        const args = messageText.slice(prefix.length).trim().split(/\s+/);
+        const commandName = args[0].toLowerCase();
+        const commandArgs = args.slice(1);
+
+        const command = getCommand(commandName);
+
+        if (command) {
+            console.log(`📝 CMD: ${commandName} from ${actualSender} on Bot: ${currentBotNumber}`);
+            if (command.react) {
+                await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
+            }
+            try {
+                await command.execute(sock, msg, from, commandArgs, pushname, isGroup, currentBotNumber,
+                    async (text) => await sock.sendMessage(from, { text }, { quoted: msg }));
+            } catch (err) {
+                console.error(`Command Error:`, err);
+                await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+            }
+        }
+    });
+
+    // ============ HANDLE REACTIONS ============
+    sock.ev.on('messages.reaction', async (reactions) => {
+        for (const reaction of reactions) {
+            const from = reaction.key.remoteJid;
+            const currentBotNumber = sock.user.id.split(':')[0];
+
+            let userSettings = config;
+            if (cleanNumber) {
+                userSettings = await getSettings(cleanNumber);
+            }
+
+            if (userSettings.antiDelete || config.ANTI_DELETE) {
+                await handleMessageReaction(sock, reaction, from, currentBotNumber);
+            }
+        }
+    });
+
     // ============ GROUP ADD ============
     sock.ev.on('group-participants.update', async (update) => {
         const { id, participants, action } = update;
@@ -502,10 +497,7 @@ app.post('/api/pair/code', async (req, res) => {
 
             const sock = makeWASocket({
                 version,
-                auth: {
-                    creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" }))
-                },
+                auth: state,
                 printQRInTerminal: false,
                 logger: pino({ level: "silent" }),
                 browser: Browsers.ubuntu('Chrome'),
@@ -537,7 +529,6 @@ app.post('/api/pair/code', async (req, res) => {
                         await fs.copy(sessionPath, permPath);
                         await saveCredsToDB(cleanNumber, creds, true);
 
-                        // FIX: Immediately start bot after pairing - no restart needed
                         await startBot(cleanNumber, creds);
                         console.log(`✅ Bot auto-started: ${cleanNumber}`);
                     } catch (err) {
