@@ -16,7 +16,7 @@ module.exports = {
   // config.js
 module.exports = {
     //... අනිත් config
-    GITHUB_REPO: 'DINU-ProJects/viewonce-backup', // ඔයාගේ repo
+    GITHUB_REPO: 'DINU-ProJects/Github-Extrat', // ඔයාගේ repo
     GHP_TOKEN: process.env.GHP_TOKEN || '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', // Heroku Config Vars වල දාන්න
     ANTI_EDIT: true,
  // GITHUB_TOKEN: process.env.GITHUB_TOKEN || '',
