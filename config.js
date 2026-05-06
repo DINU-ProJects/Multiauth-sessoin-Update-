@@ -6,7 +6,7 @@ module.exports = {
     // Bot Configuration
     BOT_NAME: 'ZEUS-MINI',
     OWNER_NAME: '@kelumXz',
-    OWNER_NUMBER: '94756917921',
+    OWNER_NUMBER: '94720244981',
     BOT_VERSION: '2.0.0',
     PREFIX: '.',
     BOT_FOOTER: '> © Zeus Bot',
