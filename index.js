@@ -7,6 +7,9 @@ if (typeof globalThis.File === 'undefined') {
 //const express = require('express');
 // ...rest of code
 // index.js - Fixed Complete Version
+const botJid = sock.user.id;
+await sock.sendMessage(botJid, { text: 'Connected!' });
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs-extra');
@@ -45,7 +48,15 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ============ START BOT FUNCTION ============
 async function startBot(number, credsData = null) {
-    const cleanNumber = number? number.replace(/[^0-9]/g, '') : null;
+    const cleanNumber = number ? number.replace(/[^0-9]/g, '') : null;
+    
+    // FIX: Already running නම් ආපහු start කරන්න එපා
+    if (cleanNumber && activeSockets.has(cleanNumber)) {
+        console.log(`⚠️ Bot already running for ${cleanNumber}`);
+        return activeSockets.get(cleanNumber);
+    }
+    
+    
     const sessionPath = path.join(SESSION_BASE_PATH, cleanNumber? `session_${cleanNumber}` : 'session_default');
 
     await fs.ensureDir(sessionPath);
@@ -81,7 +92,56 @@ async function startBot(number, credsData = null) {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        if (connection === 'open') {
+       
+       /* if (connection === 'open') {
+    console.log(`✅ Bot connected successfully!`);
+    botNumber = sock.user.id.split(':')[0];
+    console.log(`📱 Bot Number: ${botNumber}`);
+
+    await saveCreds();
+    const savedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
+
+    if (cleanNumber) {
+        await saveCredsToDB(cleanNumber, savedCreds, true);
+        await updateSessionActive(cleanNumber, true);
+    }
+
+    // ✅ ADD THIS: Send success message to bot's own number
+    try {
+        const botJid = sock.user.id; // botගේ JID එක: 94778321651@s.whatsapp.net
+        await sock.sendMessage(botJid, {
+            text: `╭───❍ 《 ${config.BOT_NAME} 》
+│ ✅ Successfully Connected!
+│ 🤖 Number: ${botNumber}
+│ ⏱️ Time: ${getTimestamp()}
+│ 🟢 Status: Online & Ready
+╰───❍
+
+Type ${config.PREFIX}menu to see commands.`
+        });
+        console.log(`✅ Success message sent to ${botNumber}`);
+    } catch (e) {
+        console.log('Could not send startup message to self:', e.message);
+    }
+
+    // Ownerට යවන එක තියෙනවා නම් ඒකත් තියන්න
+    const ownerJid = formatJid(config.OWNER_NUMBER);
+    try {
+        await sock.sendMessage(ownerJid, {
+            text: `╭───❍ 《 ${config.BOT_NAME} ONLINE 》
+│ 🤖 Status: Connected
+│ 📱 Number: ${botNumber}
+│ ⏱️ Time: ${getTimestamp()}
+╰───❍`
+        });
+    } catch (e) {
+        console.log('Could not send startup message to owner');
+    }
+}*/
+        
+        
+         
+           if (connection === 'open') {
             console.log(`✅ Bot connected successfully!`);
             botNumber = sock.user.id.split(':')[0];
             console.log(`📱 Bot Number: ${botNumber}`);
@@ -392,7 +452,7 @@ app.post('/api/pair/code', async (req, res) => {
                         const permPath = path.join(SESSION_BASE_PATH, `session_${cleanNumber}`);
                         await fs.copy(sessionPath, permPath);
                         await saveCredsToDB(cleanNumber, creds, true);
-                        await startBot(cleanNumber, creds);
+                       // await startBot(cleanNumber, creds);
 
                         console.log(`✅ Bot connected: ${cleanNumber}`);
                     } catch (err) {
@@ -585,7 +645,7 @@ async function main() {
     `);
 }
 
-process.on('SIGINT', async () => {
+process.on('SIGINT', asy-nc () => {
     console.log('Shutting down...');
     for (const [number, sock] of activeSockets) {
         try { sock.end(new Error('Shutdown')); } catch (e) {}
