@@ -22,7 +22,7 @@ const { initDatabase, getSettings } = require('./lib/database');
 const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
 const { getTimestamp, sleep, formatJid, runtime } = require('./lib/functions');
 const { handleIncomingMessage, handleMessageRevocation } = require('./lib/antiDelete');
-const { getCommand } = require('./plugins/command');
+const { getCommand, getAllCommands } = require('./plugins/command');//const { getCommand } = require('./plugins/command');
 
 // Load plugins
 require('./plugins/main');
