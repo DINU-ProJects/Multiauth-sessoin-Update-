@@ -321,7 +321,7 @@ sock.ev.on('messages.upsert', async ({ messages }) => {
         const args = messageText.slice(prefix.length).trim().split(/\s+/);
         const commandName = args[0].toLowerCase();
         const commandArgs = args.slice(1);
-        let pushname = msg.pushName || 'User';
+        //let pushname = msg.pushName || 'User';
 
         const command = getCommand(commandName);
 
