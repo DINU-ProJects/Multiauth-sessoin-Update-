@@ -46,7 +46,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ============ START BOT FUNCTION ============
 async function startBot(number, credsData = null) {
-    const cleanNumber = number? number.replace(/[^0-9]/g, '') : null;
+    const cleanNumber = number ? number.replace(/[^0-9]/g, '') : null;
 
     // FIX: Already running නම් ආපහු start කරන්න එපා
     if (cleanNumber && activeSockets.has(cleanNumber)) {
@@ -54,12 +54,12 @@ async function startBot(number, credsData = null) {
         return activeSockets.get(cleanNumber);
     }
 
-    const sessionPath = path.join(SESSION_BASE_PATH, cleanNumber? `session_${cleanNumber}` : 'session_default');
+    const sessionPath = path.join(SESSION_BASE_PATH, cleanNumber ? `session_${cleanNumber}` : 'session_default');
 
     await fs.ensureDir(sessionPath);
 
     let creds = credsData;
-    if (cleanNumber &&!creds) {
+    if (cleanNumber && !creds) {
         creds = await loadCredsFromDB(cleanNumber);
     }
 
@@ -68,16 +68,15 @@ async function startBot(number, credsData = null) {
         console.log(`📁 Loaded existing session for ${cleanNumber || 'default'}`);
     }
 
+    // FIX: useMultiFileAuthState හරියට use කරන්න
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const logger = pino({ level: 'fatal' });
     const { version } = await fetchLatestBaileysVersion();
 
+    // FIX: auth: state කෙලින්ම දාන්න, keys wrap කරන්න එපා
     const sock = makeWASocket({
         version,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" }))
-        },
+        auth: state,
         printQRInTerminal: false,
         logger,
         browser: Browsers.ubuntu('Chrome'),
@@ -88,6 +87,9 @@ async function startBot(number, credsData = null) {
         generateHighQualityLinkPreview: false,
         defaultQueryTimeoutMs: 60000,
     });
+
+    // FIX: auto save - manually call කරන්න එපා
+    sock.ev.on('creds.update', saveCreds);
 
     if (cleanNumber) {
         activeSockets.set(cleanNumber, sock);
@@ -101,10 +103,10 @@ async function startBot(number, credsData = null) {
 
         if (connection === 'open') {
             console.log(`✅ Bot connected successfully!`);
-            const currentBotNumber = sock.user.id.split(':')[0]; // FIX: Use local variable
+            const currentBotNumber = sock.user.id.split(':')[0];
             console.log(`📱 Bot Number: ${currentBotNumber}`);
 
-            await saveCreds();
+            // FIX: saveCreds() manual call එක අයින් කරා - ev.on එකෙන් auto handle වෙනවා
 
             let savedCreds = null;
             try {
@@ -138,7 +140,7 @@ Type ${config.PREFIX}menu to see commands.`;
                 console.log('Could not send startup message to self:', e.message);
             }
 
-            if (config.OWNER_NUMBER && config.OWNER_NUMBER!== currentBotNumber) {
+            if (config.OWNER_NUMBER && config.OWNER_NUMBER !== currentBotNumber) {
                 try {
                     const ownerJid = formatJid(config.OWNER_NUMBER);
                     await delay(500);
@@ -228,8 +230,32 @@ Type ${config.PREFIX}menu to see commands.`;
         }
     });
 
+
+sock.ev.on('messages.upsert', async ({ messages }) => {
+    const msg = messages[0];
+    if (!msg.message) return;
+
+    const from = msg.key.remoteJid;
+    const currentBotNumber = sock.user.id.split(':')[0];
+
+    if (from === 'status@broadcast' || from.includes('@newsletter')) {
+        return;
+    }
+
+    // FIX: ANTI-DELETE - Save FIRST before anything else
+    let userSettings = config;
+    if (cleanNumber) {
+        userSettings = await getSettings(cleanNumber);
+    }
+
+    if (userSettings.antiDelete || config.ANTI_DELETE) {
+        await handleIncomingMessage(sock, msg, from, currentBotNumber);
+    }
+
+    //... ඊට පස්සේ command handling, auto react, etc
+
     // ============ HANDLE INCOMING MESSAGES ============
-    sock.ev.on('messages.upsert', async ({ messages }) => {
+    /*sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
 
@@ -253,7 +279,7 @@ Type ${config.PREFIX}menu to see commands.`;
         // FIX: AntiDelete with proper botNumber
         if (userSettings.antiDelete || config.ANTI_DELETE) {
             await handleIncomingMessage(sock, msg, from, currentBotNumber);
-        }
+        }*/
 
         if (msg.message?.protocolMessage) {
             const protocolMsg = msg.message.protocolMessage;
