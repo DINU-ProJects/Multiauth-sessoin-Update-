@@ -8,7 +8,7 @@ if (typeof globalThis.File === 'undefined') {
 // ...rest of code
 // index.js - Fixed Complete Version
 const botJid = sock.user.id;
-await sock.sendMessage(botJid, { text: 'Connected!' });
+//await sock.sendMessage(botJid, { text: 'Connected!' });
 
 const express = require('express');
 const path = require('path');
