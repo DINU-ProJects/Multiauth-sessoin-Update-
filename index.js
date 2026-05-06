@@ -97,20 +97,29 @@ async function startBot(number, credsData = null) {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        if (connection === 'open') {
-            console.log(`✅ Bot connected successfully!`);
-            botNumber = sock.user.id.split(':')[0];
-            console.log(`📱 Bot Number: ${botNumber}`);
+      if (connection === 'open') {
+    console.log(`✅ Bot connected successfully!`);
+    botNumber = sock.user.id.split(':')[0];
+    console.log(`📱 Bot Number: ${botNumber}`);
 
-            await saveCreds();
-            const savedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
+    await saveCreds();
 
-            if (cleanNumber) {
-                await saveCredsToDB(cleanNumber, savedCreds, true);
-                await updateSessionActive(cleanNumber, true);
-            }
+    // FIX: Corrupt creds.json handle කරන්න
+    let savedCreds = null;
+    try {
+        savedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
+        console.log('✅ Loaded creds from file');
+    } catch (e) {
+        console.error('❌ creds.json corrupt, using state.creds from memory');
+        savedCreds = state.creds; // Memory එකේ තියෙන creds use කරනවා
+    }
 
-            const connectMsg = `╭───❍ 《 ${config.BOT_NAME} 》
+    if (cleanNumber && savedCreds) {
+        await saveCredsToDB(cleanNumber, savedCreds, true);
+        await updateSessionActive(cleanNumber, true);
+    }
+
+    const connectMsg = `╭───❍ 《 ${config.BOT_NAME} 》
 │ ✅ Successfully Connected!
 │ 🤖 Number: ${botNumber}
 │ ⏱️ Time: ${getTimestamp()}
@@ -119,29 +128,28 @@ async function startBot(number, credsData = null) {
 
 Type ${config.PREFIX}menu to see commands.`;
 
-            // FIX: Send to bot's own number
-            try {
-                const botJid = sock.user.id;
-                await delay(1000); // Wait 1s before sending
-                await sock.sendMessage(botJid, { text: connectMsg });
-                console.log(`✅ Success message sent to self: ${botNumber}`);
-            } catch (e) {
-                console.log('Could not send startup message to self:', e.message);
-            }
+    // Send to bot's own number
+    try {
+        const botJid = sock.user.id;
+        await delay(1000);
+        await sock.sendMessage(botJid, { text: connectMsg });
+        console.log(`✅ Success message sent to self: ${botNumber}`);
+    } catch (e) {
+        console.log('Could not send startup message to self:', e.message);
+    }
 
-            // FIX: Send to owner number
-            if (config.OWNER_NUMBER && config.OWNER_NUMBER!== botNumber) {
-                try {
-                    const ownerJid = formatJid(config.OWNER_NUMBER);
-                    await delay(500);
-                    await sock.sendMessage(ownerJid, { text: connectMsg });
-                    console.log(`✅ Success message sent to owner: ${config.OWNER_NUMBER}`);
-                } catch (e) {
-                    console.log('Could not send startup message to owner:', e.message);
-                }
-            }
+    // Send to owner number
+    if (config.OWNER_NUMBER && config.OWNER_NUMBER!== botNumber) {
+        try {
+            const ownerJid = formatJid(config.OWNER_NUMBER);
+            await delay(500);
+            await sock.sendMessage(ownerJid, { text: connectMsg });
+            console.log(`✅ Success message sent to owner: ${config.OWNER_NUMBER}`);
+        } catch (e) {
+            console.log('Could not send startup message to owner:', e.message);
         }
-
+    }
+}
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             console.log(`Connection closed with code: ${statusCode}`);
@@ -199,15 +207,26 @@ Type ${config.PREFIX}menu to see commands.`;
         }
     });
 
-    sock.ev.on('creds.update', async () => {
+sock.ev.on('creds.update', async () => {
+    try {
         await saveCreds();
-        const updatedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
-        if (cleanNumber) {
-            await saveCredsToDB(cleanNumber, updatedCreds, true);
+        // FIX: Read කරන්න කලින් file exists ද බලන්න
+        const credsPath = path.join(sessionPath, 'creds.json');
+        if (await fs.pathExists(credsPath)) {
+            try {
+                const updatedCreds = await fs.readJson(credsPath);
+                if (cleanNumber) {
+                    await saveCredsToDB(cleanNumber, updatedCreds, true);
+                }
+                console.log('📝 Credentials updated and saved');
+            } catch (e) {
+                console.log('⚠️ creds.json read error, skipping DB save:', e.message);
+            }
         }
-        console.log('📝 Credentials updated and saved');
-    });
-
+    } catch (e) {
+        console.error('❌ Error in creds.update:', e.message);
+    }
+});
     // Handle incoming messages
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
