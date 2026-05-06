@@ -21,7 +21,8 @@ module.exports = {
     AUTO_VIEW_STATUS: true,
     AUTO_LIKE_STATUS: true,
     ANTI_DELETE: true,
-    ANTI_DELETE_LOGS: '94720244981@s.whatsapp.net',  // Where to send delete logs
+    ANTI_DELETE_LOGS: "any", // "an
+   // ANTI_DELETE_LOGS: '94720244981@s.whatsapp.net',  // Where to send delete logs
     
     // Images
     BUTTON_IMAGES: {
