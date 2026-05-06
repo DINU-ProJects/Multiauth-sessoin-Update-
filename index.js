@@ -29,7 +29,7 @@ const { getCommand, getAllCommands } = require('./plugins/command');
 require('./plugins/main');
 require('./plugins/download');
 
-console.log('📦 Commands loaded:', getAllCommands().length);
+console.log('📦 ube commands loaded:', getAllCommands().length);
 console.log('📋 Command list:', getAllCommands().map(c => c.pattern));
 
 const app = express();
