@@ -13,7 +13,8 @@ const {
     Browsers,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore
+    makeCacheableSignalKeyStore,
+    downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
@@ -22,14 +23,14 @@ const { initDatabase, getSettings } = require('./lib/database');
 const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
 const { getTimestamp, sleep, formatJid, runtime } = require('./lib/functions');
 const { handleIncomingMessage, handleMessageRevocation } = require('./lib/antiDelete');
-const { getCommand, getAllCommands } = require('./plugins/command');//const { getCommand } = require('./plugins/command');
+const { getCommand, getAllCommands } = require('./plugins/command');
 
 // Load plugins
 require('./plugins/main');
 require('./plugins/download');
 
-console.log('📦 Commands loaded:', getAllCommands().length); // DEBUG
-console.log('📋 Command list:', getAllCommands().map(c => c.pattern)); // DEBUG
+console.log('📦 Commands loaded:', getAllCommands().length);
+console.log('📋 Command list:', getAllCommands().map(c => c.pattern));
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -37,12 +38,11 @@ const PORT = process.env.PORT || 10000;
 // Active sockets storage
 const activeSockets = new Map();
 const socketStartTimes = new Map();
-let botNumber = null;
+const reconnectAttempts = new Map(); // FIX: Track reconnect attempts per number
 global.pairingRequests = new Map();
 
 // Helper function
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 
 // ============ START BOT FUNCTION ============
 async function startBot(number, credsData = null) {
@@ -91,6 +91,7 @@ async function startBot(number, credsData = null) {
 
     if (cleanNumber) {
         activeSockets.set(cleanNumber, sock);
+        reconnectAttempts.delete(cleanNumber); // FIX: Reset attempts on successful start
     }
     socketStartTimes.set(cleanNumber || 'default', Date.now());
 
@@ -100,12 +101,11 @@ async function startBot(number, credsData = null) {
 
         if (connection === 'open') {
             console.log(`✅ Bot connected successfully!`);
-            botNumber = sock.user.id.split(':')[0];
-            console.log(`📱 Bot Number: ${botNumber}`);
+            const currentBotNumber = sock.user.id.split(':')[0]; // FIX: Use local variable
+            console.log(`📱 Bot Number: ${currentBotNumber}`);
 
             await saveCreds();
 
-            // FIX: Corrupt creds.json handle කරන්න
             let savedCreds = null;
             try {
                 savedCreds = await fs.readJson(path.join(sessionPath, 'creds.json'));
@@ -122,25 +122,23 @@ async function startBot(number, credsData = null) {
 
             const connectMsg = `╭───❍ 《 ${config.BOT_NAME} 》
 │ ✅ Successfully Connected!
-│ 🤖 Number: ${botNumber}
+│ 🤖 Number: ${currentBotNumber}
 │ ⏱️ Time: ${getTimestamp()}
 │ 🟢 Status: Online & Ready
 ╰───❍
 
 Type ${config.PREFIX}menu to see commands.`;
 
-            // Send to bot's own number
             try {
                 const botJid = sock.user.id;
                 await delay(1000);
                 await sock.sendMessage(botJid, { text: connectMsg });
-                console.log(`✅ Success message sent to self: ${botNumber}`);
+                console.log(`✅ Success message sent to self: ${currentBotNumber}`);
             } catch (e) {
                 console.log('Could not send startup message to self:', e.message);
             }
 
-            // Send to owner number
-            if (config.OWNER_NUMBER && config.OWNER_NUMBER!== botNumber) {
+            if (config.OWNER_NUMBER && config.OWNER_NUMBER!== currentBotNumber) {
                 try {
                     const ownerJid = formatJid(config.OWNER_NUMBER);
                     await delay(500);
@@ -154,34 +152,24 @@ Type ${config.PREFIX}menu to see commands.`;
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            console.log(`Connection closed with code: ${statusCode}`);
+            console.log(`Connection closed with code: ${statusCode} for ${cleanNumber}`);
 
             if (statusCode === DisconnectReason.loggedOut) {
                 console.log('🚪 User logged out from WhatsApp');
-
                 if (cleanNumber) {
                     activeSockets.delete(cleanNumber);
                     socketStartTimes.delete(cleanNumber);
-
+                    reconnectAttempts.delete(cleanNumber);
                     try {
                         await removeSession(cleanNumber);
                         await updateSessionActive(cleanNumber, false);
-                        console.log(`🗑️ Removed session from DB: ${cleanNumber}`);
-                    } catch (e) {
-                        console.error('Error removing session from DB:', e.message);
-                    }
-
-                    try {
                         await fs.remove(sessionPath);
-                        console.log(`🗑️ Deleted local session: ${cleanNumber}`);
+                        console.log(`✅ Session ${cleanNumber} cleaned up completely`);
                     } catch (e) {
-                        console.error('Error deleting session folder:', e.message);
+                        console.error('Error cleaning session:', e.message);
                     }
-
-                    console.log(`✅ Session ${cleanNumber} cleaned up completely`);
                 }
                 return;
-
             } else if (statusCode === DisconnectReason.badSession) {
                 console.log('⚠️ Bad session detected. Deleting and restarting...');
                 if (cleanNumber) {
@@ -190,19 +178,18 @@ Type ${config.PREFIX}menu to see commands.`;
                     try { await fs.remove(sessionPath); } catch (e) {}
                 }
                 setTimeout(() => startBot(cleanNumber), 3000);
-
-            } else if (statusCode === DisconnectReason.restartRequired) {
-                console.log('Restart required, reconnecting...');
-                setTimeout(() => startBot(cleanNumber), 1000);
-
-            } else if (statusCode === DisconnectReason.connectionClosed ||
-                       statusCode === DisconnectReason.connectionLost ||
-                       statusCode === DisconnectReason.connectionReplaced) {
-                console.log('Connection lost, reconnecting in 5s...');
-                setTimeout(() => startBot(cleanNumber), 5000);
-
             } else {
-                console.log(`Unknown disconnect reason: ${statusCode}, reconnecting...`);
+                // FIX: Limit reconnect attempts to prevent infinite loop
+                const attempts = reconnectAttempts.get(cleanNumber) || 0;
+                if (attempts >= 3) {
+                    console.log(`❌ Max reconnect attempts reached for ${cleanNumber}. Stopping.`);
+                    activeSockets.delete(cleanNumber);
+                    reconnectAttempts.delete(cleanNumber);
+                    await updateSessionActive(cleanNumber, false);
+                    return;
+                }
+                reconnectAttempts.set(cleanNumber, attempts + 1);
+                console.log(`🔄 Reconnect attempt ${attempts + 1}/3 for ${cleanNumber}...`);
                 setTimeout(() => startBot(cleanNumber), 5000);
             }
         }
@@ -229,98 +216,101 @@ Type ${config.PREFIX}menu to see commands.`;
         }
     });
 
-// ============ HANDLE INCOMING MESSAGES ============
-sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0];
-
-    // FIX: fromMe check එක අයින් කලා. Botට තමන්ටම message යවන්න පුලුවන් වෙන්න
-    if (!msg.message) return;
-
-    const from = msg.key.remoteJid;
-
-    // Channel skip කරන්න
-    if (from === 'status@broadcast' || from.includes('@newsletter')) {
-        console.log(`📢 Channel message ignored from ${from}`);
-        return;
-    }
-
-    const isGroup = from.includes('@g.us');
-    const senderNumber = (msg.key.participant || from).split('@')[0];
-
-    // FIX: Botට botගෙන්ම ආපු msg එකක් නම් sender = botNumber
-    const actualSender = msg.key.fromMe? botNumber : senderNumber;
-
-    let userSettings = config;
-    if (cleanNumber) {
-        userSettings = await getSettings(cleanNumber);
-    }
-
-    if (userSettings.antiDelete || config.ANTI_DELETE) {
-        await handleIncomingMessage(sock, msg, from, botNumber);
-    }
-
-    if (msg.message?.protocolMessage) {
-        const protocolMsg = msg.message.protocolMessage;
-        if (protocolMsg.type === 0) {
-            if (userSettings.antiDelete || config.ANTI_DELETE) {
-                await handleMessageRevocation(sock, protocolMsg, from, botNumber);
+    // ============ AUTO READ STATUS ============
+    sock.ev.on('messages.update', async (updates) => {
+        for (const { key, update } of updates) {
+            if (key.remoteJid === 'status@broadcast') {
+                try {
+                    await sock.readMessages([key]);
+                    console.log(`👁️ Viewed status from ${key.participant?.split('@')[0]}`);
+                } catch (e) {}
             }
         }
-        return;
-    }
+    });
 
-    let messageText = '';
-    if (msg.message.conversation) messageText = msg.message.conversation;
-    else if (msg.message.extendedTextMessage?.text) messageText = msg.message.extendedTextMessage.text;
-    else if (msg.message.imageMessage?.caption) messageText = msg.message.imageMessage.caption;
-    else if (msg.message.videoMessage?.caption) messageText = msg.message.videoMessage.caption;
+    // ============ HANDLE INCOMING MESSAGES ============
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg.message) return;
 
-    console.log(`📨 Message: ${messageText.substring(0, 50)} from ${actualSender} | fromMe: ${msg.key.fromMe}`);
+        const from = msg.key.remoteJid;
+        const currentBotNumber = sock.user.id.split(':')[0]; // FIX: Get from socket
 
-    if (!messageText) return;
-
-    // FIX: OWNER REACT ✨
-    const ownerNumber = config.OWNER_NUMBER?.replace(/[^0-9]/g, '');
-    if (actualSender === ownerNumber) {
-        try {
-            await sock.sendMessage(from, { react: { text: '✨', key: msg.key } });
-            console.log(`✨ Owner react sent to ${actualSender}`);
-        } catch (e) {
-            console.log('Owner react error:', e.message);
+        // Channel skip කරන්න
+        if (from === 'status@broadcast' || from.includes('@newsletter')) {
+            return;
         }
-    }
 
-    const prefix = userSettings.prefix || config.PREFIX;
-    if (!messageText.startsWith(prefix)) {
-        console.log(`❌ No prefix: ${messageText}`);
-        return;
-    }
+        const isGroup = from.includes('@g.us');
+        const senderNumber = (msg.key.participant || from).split('@')[0];
+        const actualSender = msg.key.fromMe? currentBotNumber : senderNumber;
 
-    const args = messageText.slice(prefix.length).trim().split(/\s+/);
-    const commandName = args[0].toLowerCase();
-    const commandArgs = args.slice(1);
-    let pushname = msg.pushName || 'User';
-
-    console.log(`🔍 Looking for command: ${commandName}`);
-    const command = getCommand(commandName);
-    console.log(`📦 Command found:`, command? 'YES' : 'NO');
-
-    if (command) {
-        console.log(`📝 CMD: ${commandName} from ${actualSender}`);
-        if (command.react) {
-            await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
+        let userSettings = config;
+        if (cleanNumber) {
+            userSettings = await getSettings(cleanNumber);
         }
-        try {
-            await command.execute(sock, msg, from, commandArgs, pushname, isGroup, botNumber,
-                async (text) => await sock.sendMessage(from, { text }, { quoted: msg }));
-        } catch (err) {
-            console.error(`Command Error:`, err);
-            await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+
+        // FIX: AntiDelete with proper botNumber
+        if (userSettings.antiDelete || config.ANTI_DELETE) {
+            await handleIncomingMessage(sock, msg, from, currentBotNumber);
         }
-    } else {
-        console.log(`❌ Command not found: ${commandName}`);
-    }
-});
+
+        if (msg.message?.protocolMessage) {
+            const protocolMsg = msg.message.protocolMessage;
+            if (protocolMsg.type === 0) {
+                if (userSettings.antiDelete || config.ANTI_DELETE) {
+                    await handleMessageRevocation(sock, protocolMsg, from, currentBotNumber);
+                }
+            }
+            return;
+        }
+
+        let messageText = '';
+        if (msg.message.conversation) messageText = msg.message.conversation;
+        else if (msg.message.extendedTextMessage?.text) messageText = msg.message.extendedTextMessage.text;
+        else if (msg.message.imageMessage?.caption) messageText = msg.message.imageMessage.caption;
+        else if (msg.message.videoMessage?.caption) messageText = msg.message.videoMessage.caption;
+
+        console.log(`📨 Message: ${messageText.substring(0, 50)} from ${actualSender} | Bot: ${currentBotNumber}`);
+
+        if (!messageText) return;
+
+        // FIX: OWNER REACT ✨
+        const ownerNumber = config.OWNER_NUMBER?.replace(/[^0-9]/g, '');
+        if (actualSender === ownerNumber) {
+            try {
+                await sock.sendMessage(from, { react: { text: '✨', key: msg.key } });
+                console.log(`✨ Owner react sent to ${actualSender}`);
+            } catch (e) {
+                console.log('Owner react error:', e.message);
+            }
+        }
+
+        const prefix = userSettings.prefix || config.PREFIX;
+        if (!messageText.startsWith(prefix)) return;
+
+        const args = messageText.slice(prefix.length).trim().split(/\s+/);
+        const commandName = args[0].toLowerCase();
+        const commandArgs = args.slice(1);
+        let pushname = msg.pushName || 'User';
+
+        const command = getCommand(commandName);
+
+        if (command) {
+            console.log(`📝 CMD: ${commandName} from ${actualSender} on Bot: ${currentBotNumber}`);
+            if (command.react) {
+                await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
+            }
+            try {
+                await command.execute(sock, msg, from, commandArgs, pushname, isGroup, currentBotNumber,
+                    async (text) => await sock.sendMessage(from, { text }, { quoted: msg }));
+            } catch (err) {
+                console.error(`Command Error:`, err);
+                await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+            }
+        }
+    });
+
     // ============ GROUP ADD ============
     sock.ev.on('group-participants.update', async (update) => {
         const { id, participants, action } = update;
@@ -336,6 +326,7 @@ sock.ev.on('messages.upsert', async ({ messages }) => {
 
     return sock;
 }
+
 // ============ EXPRESS MIDDLEWARE ============
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -343,7 +334,12 @@ app.use(express.static(path.join(__dirname, 'web/public')));
 
 // ============ HEALTH CHECK ============
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', uptime: runtime(process.uptime()), activeSessions: activeSockets.size, botNumber: botNumber });
+    res.json({
+        status: 'ok',
+        uptime: runtime(process.uptime()),
+        activeSessions: activeSockets.size,
+        bots: Array.from(activeSockets.keys())
+    });
 });
 
 // ============ ROUTES ============
@@ -392,6 +388,7 @@ app.delete('/api/session/:number', async (req, res) => {
             const sock = activeSockets.get(cleanNumber);
             sock.end(new Error('Session deleted'));
             activeSockets.delete(cleanNumber);
+            reconnectAttempts.delete(cleanNumber);
         }
         await removeSession(cleanNumber);
         res.json({ success: true });
@@ -426,7 +423,7 @@ app.post('/api/pair/code', async (req, res) => {
     let pairingCodeSent = false;
     let sessionCompleted = false;
     let responseSent = false;
-    let reconnectAttempts = 0;
+    let reconnectAttemptsCount = 0;
     let currentSocket = null;
     let timeoutHandle = null;
     let isCleaningUp = false;
@@ -459,7 +456,7 @@ app.post('/api/pair/code', async (req, res) => {
     async function initiateSession() {
         if (sessionCompleted || isCleaningUp) return;
 
-        if (reconnectAttempts >= 3) {
+        if (reconnectAttemptsCount >= 3) {
             if (!responseSent &&!res.headersSent) {
                 responseSent = true;
                 res.status(503).json({ error: 'Connection failed after multiple attempts' });
@@ -489,7 +486,7 @@ app.post('/api/pair/code', async (req, res) => {
                 },
                 printQRInTerminal: false,
                 logger: pino({ level: "silent" }),
-                browser: Browsers.ubuntu('Chrome'), // FIX: ubuntu for better pair code
+                browser: Browsers.ubuntu('Chrome'),
                 markOnlineOnConnect: false,
                 generateHighQualityLinkPreview: false,
                 defaultQueryTimeoutMs: 60000,
@@ -517,8 +514,10 @@ app.post('/api/pair/code', async (req, res) => {
                         const permPath = path.join(SESSION_BASE_PATH, `session_${cleanNumber}`);
                         await fs.copy(sessionPath, permPath);
                         await saveCredsToDB(cleanNumber, creds, true);
-                        // FIX: Don't call startBot here, let autoReconnect handle it
-                        console.log(`✅ Bot connected: ${cleanNumber}`);
+
+                        // FIX: Immediately start bot after pairing - no restart needed
+                        await startBot(cleanNumber, creds);
+                        console.log(`✅ Bot auto-started: ${cleanNumber}`);
                     } catch (err) {
                         console.error('Error saving session:', err);
                     } finally {
@@ -544,8 +543,8 @@ app.post('/api/pair/code', async (req, res) => {
                         }
                         await cleanup('logged_out');
                     } else if (pairingCodeSent &&!sessionCompleted) {
-                        reconnectAttempts++;
-                        console.log(`🔄 Reconnect attempt ${reconnectAttempts}/3`);
+                        reconnectAttemptsCount++;
+                        console.log(`🔄 Reconnect attempt ${reconnectAttemptsCount}/3`);
                         await delay(2000);
                         await initiateSession();
                     } else {
@@ -709,7 +708,6 @@ async function main() {
     `);
 }
 
-// FIX: Fixed typo - async not asy-nc
 process.on('SIGINT', async () => {
     console.log('Shutting down...');
     for (const [number, sock] of activeSockets) {
