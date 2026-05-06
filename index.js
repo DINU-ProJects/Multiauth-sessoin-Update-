@@ -1,3 +1,10 @@
+// Add this at the VERY TOP of index.js
+global.File = class File extends Blob {
+    constructor(bits, name, options) {
+        super(bits, options);
+        this.name = name;
+    }
+};
 // index.js - Complete Working Version
 const express = require('express');
 const path = require('path');
