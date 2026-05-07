@@ -8,10 +8,9 @@ const process = require('process');
 
 //-----------------------------------------------ALIVE-----------------------------------------------
 const axios = require('axios');
-//const config = require('../settings');
-//const { cmd, commands } = require('../lib/command');
-
 const fs = require("fs");
+const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+const pino = require('pino');
 
 cmd({
     pattern: "vv",
@@ -19,15 +18,15 @@ cmd({
     alias: ["retrive", "viewonce"],
     desc: "Fetch and resend a ViewOnce message content (image/video/voice).",
     category: "misc",
-    use: "<query>",
+    use: "<reply to viewonce>",
     filename: __filename
-}, async (conn, mek, m, { from, reply }) => {
+}, async (conn, mek, m, { from, quoted, reply }) => { // ← quoted, reply add කරපන්
     try {
-        if (!m.quoted) return reply("Please reply to a ViewOnce message.");
+        if (!quoted) return reply("Please reply to a ViewOnce message.");
 
-        const mime = m.quoted.type;
+        const mime = quoted.mtype;
         let ext, mediaType;
-        
+
         if (mime === "imageMessage") {
             ext = "jpg";
             mediaType = "image";
@@ -41,23 +40,34 @@ cmd({
             return reply("Unsupported media type. Please reply to an image, video, or audio message.");
         }
 
-        var buffer = await m.quoted.download();
-        var filePath = `${Date.now()}.${ext}`;
+        // FIX: Baileys downloadMediaMessage use කරන්න
+        const buffer = await downloadMediaMessage(
+            quoted,
+            'buffer',
+            {},
+            {
+                logger: pino({ level: 'silent' }),
+                reuploadRequest: conn.updateMediaMessage
+            }
+        );
 
-        fs.writeFileSync(filePath, buffer); 
+        if (!buffer) return reply("❌ Failed to download media. ViewOnce expired.");
 
         let mediaObj = {};
-        mediaObj[mediaType] = fs.readFileSync(filePath);
+        mediaObj[mediaType] = buffer;
 
-        await conn.sendMessage(m.chat, mediaObj);
+        if (mediaType === 'audio') {
+            mediaObj.ptt = quoted.msg?.ptt || false;
+        }
 
-        fs.unlinkSync(filePath);
+        await conn.sendMessage(from, mediaObj, { quoted: mek });
 
     } catch (e) {
         console.log("Error:", e);
-        reply("An error occurred while fetching the ViewOnce message.", e);
+        reply(`An error occurred: ${e.message}`);
     }
 });
+
 
 
 cmd({
