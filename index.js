@@ -575,6 +575,7 @@ Type ${config.PREFIX}menu to see commands.`;
         }
 
         // ============ COMMAND HANDLING ============
+                // ============ COMMAND HANDLING ============
         const prefix = userSettings.prefix || config.PREFIX;
         if (!messageText.startsWith(prefix)) return;
 
@@ -586,10 +587,14 @@ Type ${config.PREFIX}menu to see commands.`;
 
         if (command) {
             console.log(`📝 CMD: ${commandName} from ${actualSender} on Bot: ${currentBotNumber}`);
+
+            // React
             if (command.react) {
                 await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
             }
+
             try {
+                // ============ Build Context ============
                 const isMe = msg.key.fromMe;
                 const isOwner = actualSender.includes(config.OWNER_NUMBER);
                 const isCreator = isOwner;
@@ -604,11 +609,63 @@ Type ${config.PREFIX}menu to see commands.`;
                 const isBotAdmins = isGroup? groupAdmins.includes(botNumber) : false;
                 const isAdmins = isGroup? groupAdmins.includes(actualSender) : false;
                 const reply = (text) => sock.sendMessage(from, { text }, { quoted: msg });
-                const q = args.join(' ');
+                const q = commandArgs.join(' ');
                 const l = console.log;
 
+                // FIX: Quoted message object හරියට හදන්න
+                let quoted = null;
+                if (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+                    const quotedMsg = msg.message.extendedTextMessage.contextInfo.quotedMessage;
+                    const quotedKey = {
+                        remoteJid: from,
+                        fromMe: msg.message.extendedTextMessage.contextInfo.participant === botNumber,
+                        id: msg.message.extendedTextMessage.contextInfo.stanzaId,
+                        participant: msg.message.extendedTextMessage.contextInfo.participant
+                    };
+                    quoted = {
+                        key: quotedKey,
+                        message: quotedMsg,
+                       ...quotedMsg
+                    };
+                    // Baileys download support
+                    quoted.download = () => downloadMediaMessage(quoted, 'buffer', {}, {
+                        logger: pino({ level: 'silent' }),
+                        reuploadRequest: sock.updateMediaMessage
+                    });
+                }
+
+                // ============ Execute Command ============
                 await command.execute(sock, msg, from, commandArgs, pushname, isGroup, currentBotNumber,
-                    reply, { from, prefix, l, quoted: msg, body: messageText, isCmd: true, command: commandName, args, q, isGroup, sender: actualSender, senderNumber, botNumber2, botNumber, pushname, isMe, isOwner, groupMetadata, groupName, participants, groupAdmins, isBotAdmins, isAdmins, reply, config, isCreator, isDev });
+                    reply, {
+                        from,
+                        prefix,
+                        l,
+                        quoted,
+                        body: messageText,
+                        isCmd: true,
+                        command: commandName,
+                        args: commandArgs,
+                        q,
+                        isGroup,
+                        sender: actualSender,
+                        senderNumber,
+                        botNumber2,
+                        botNumber,
+                        pushname,
+                        isMe,
+                        isOwner,
+                        groupMetadata,
+                        groupName,
+                        participants,
+                        groupAdmins,
+                        isBotAdmins,
+                        isAdmins,
+                        reply,
+                        config,
+                        isCreator,
+                        isDev
+                    });
+
             } catch (err) {
                 console.error(`Command Error:`, err);
                 await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
