@@ -1,4 +1,4 @@
-// index.js - Full Optimized Version
+// index.js - Full Optimized Version with DB Auto-Save
 const { File } = require('node:buffer');
 if (typeof globalThis.File === 'undefined') {
   globalThis.File = File;
@@ -7,24 +7,24 @@ if (typeof globalThis.File === 'undefined') {
 const express = require('express');
 const path = require('path');
 const fs = require('fs-extra');
+const axios = require('axios');
 const {
     makeWASocket,
     useMultiFileAuthState,
     Browsers,
     DisconnectReason,
-    fetchLatestBaileysVersion
+    fetchLatestBaileysVersion,
+    prepareWAMessageMedia,
+    generateWAMessageFromContent
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const config = require('./config');
 const { initDatabase, getSettings } = require('./lib/database');
 const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
-const { getTimestamp, sleep, formatJid, runtime } = require('./lib/functions');
+const { getTimestamp, sleep, formatJid, runtime, getBuffer } = require('./lib/functions');
 const { handleIncomingMessage, handleMessageRevocation, handleMessageReaction } = require('./lib/antiDelete');
-const { handleMessageEdit } = require('./lib/antiEdit'); // ← මේක අලුතෙන් add කරන්න
-
-//const { handleIncomingMessage, handleMessageRevocation, handleMessageReaction } = require('./lib/antiDelete');
-//const { handleMessageEdit } = require('./lib/antiEdit');
+const { handleMessageEdit } = require('./lib/antiEdit');
 const { getCommand, getAllCommands } = require('./plugins/command');
 
 // Load plugins
@@ -58,9 +58,18 @@ async function startBot(number, credsData = null) {
     const sessionPath = path.join(SESSION_BASE_PATH, cleanNumber? `session_${cleanNumber}` : 'session_default');
     await fs.ensureDir(sessionPath);
 
-    // FIX: Don't manually write creds.json - let useMultiFileAuthState handle it
+    // FIX: DB එකෙන් load කරලා file එකට ලියන්නේ useMultiFileAuthState එකෙන්
     if (credsData && cleanNumber) {
-        await saveCredsToDB(cleanNumber, credsData, false);
+        // DB එකේ තියෙන creds file එකට දාන්න
+        await fs.writeFile(path.join(sessionPath, 'creds.json'), JSON.stringify(credsData, null, 2));
+        console.log(`📁 Loaded session from DB for ${cleanNumber}`);
+    } else if (cleanNumber) {
+        // DB එකෙන් auto load කරන්න
+        const dbCreds = await loadCredsFromDB(cleanNumber);
+        if (dbCreds) {
+            await fs.writeFile(path.join(sessionPath, 'creds.json'), JSON.stringify(dbCreds, null, 2));
+            console.log(`📁 Auto-loaded session from DB for ${cleanNumber}`);
+        }
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -69,7 +78,7 @@ async function startBot(number, credsData = null) {
 
     const sock = makeWASocket({
         version,
-        auth: state, // FIX: Direct state, no wrapper
+        auth: state,
         printQRInTerminal: false,
         logger,
         browser: Browsers.ubuntu('Chrome'),
@@ -81,13 +90,182 @@ async function startBot(number, credsData = null) {
         defaultQueryTimeoutMs: 60000,
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    // FIX: Creds update උනාම DB එකට auto save
+    sock.ev.on('creds.update', async () => {
+        await saveCreds();
+        const credsPath = path.join(sessionPath, 'creds.json');
+        if (await fs.pathExists(credsPath) && cleanNumber) {
+            try {
+                const updatedCreds = await fs.readJson(credsPath);
+                await saveCredsToDB(cleanNumber, updatedCreds, true);
+                console.log('📝 Session auto-saved to DB');
+            } catch (e) {
+                console.log('⚠️ DB save error:', e.message);
+            }
+        }
+    });
 
     if (cleanNumber) {
         activeSockets.set(cleanNumber, sock);
         reconnectAttempts.delete(cleanNumber);
     }
     socketStartTimes.set(cleanNumber || 'default', Date.now());
+
+    // ============ BUTTON FUNCTIONS ============
+    sock.edit = async (mek, newmg) => {
+        await sock.relayMessage(mek.key.remoteJid, {
+            protocolMessage: {
+                key: mek.key,
+                type: 14,
+                editedMessage: {
+                    conversation: newmg
+                }
+            }
+        }, {})
+    }
+
+    sock.sendFileUrl = async (jid, url, caption, quoted, options = {}) => {
+        let mime = '';
+        let res = await axios.head(url)
+        mime = res.headers['content-type']
+        if (mime.split("/")[1] === "gif") {
+            return sock.sendMessage(jid, {
+                video: await getBuffer(url),
+                caption: caption,
+                gifPlayback: true,
+               ...options
+            }, {
+                quoted: quoted,
+               ...options
+            })
+        }
+        let type = mime.split("/")[0] + "Message"
+        if (mime === "application/pdf") {
+            return sock.sendMessage(jid, {
+                document: await getBuffer(url),
+                mimetype: 'application/pdf',
+                caption: caption,
+               ...options
+            }, {
+                quoted: quoted,
+               ...options
+            })
+        }
+        if (mime.split("/")[0] === "image") {
+            return sock.sendMessage(jid, {
+                image: await getBuffer(url),
+                caption: caption,
+               ...options
+            }, {
+                quoted: quoted,
+               ...options
+            })
+        }
+        if (mime.split("/")[0] === "video") {
+            return sock.sendMessage(jid, {
+                video: await getBuffer(url),
+                caption: caption,
+                mimetype: 'video/mp4',
+               ...options
+            }, {
+                quoted: quoted,
+               ...options
+            })
+        }
+        if (mime.split("/")[0] === "audio") {
+            return sock.sendMessage(jid, {
+                audio: await getBuffer(url),
+                caption: caption,
+                mimetype: 'audio/mpeg',
+               ...options
+            }, {
+                quoted: quoted,
+               ...options
+            })
+        }
+    }
+
+    sock.sendButtonMessage = async (jid, buttons, quoted, opts = {}) => {
+        let header;
+        if (opts?.video) {
+            var video = await prepareWAMessageMedia({
+                video: {
+                    url: opts && opts.video? opts.video : ''
+                }
+            }, {
+                upload: sock.waUploadToServer
+            })
+            header = {
+                title: opts && opts.header? opts.header : '',
+                hasMediaAttachment: true,
+                videoMessage: video.videoMessage,
+            }
+        } else if (opts?.image) {
+            var image = await prepareWAMessageMedia({
+                image: {
+                    url: opts && opts.image? opts.image : ''
+                }
+            }, {
+                upload: sock.waUploadToServer
+            })
+            header = {
+                title: opts && opts.header? opts.header : '',
+                hasMediaAttachment: true,
+                imageMessage: image.imageMessage,
+            }
+        } else {
+            header = {
+                title: opts && opts.header? opts.header : '',
+                hasMediaAttachment: false,
+            }
+        }
+
+        let message = generateWAMessageFromContent(jid, {
+            viewOnceMessage: {
+                message: {
+                    messageContextInfo: {
+                        deviceListMetadata: {},
+                        deviceListMetadataVersion: 2,
+                    },
+                    interactiveMessage: {
+                        body: {
+                            text: opts && opts.body? opts.body : ''
+                        },
+                        footer: {
+                            text: opts && opts.footer? opts.footer : ''
+                        },
+                        header: header,
+                        nativeFlowMessage: {
+                            buttons: buttons,
+                            messageParamsJson: ''
+                        }
+                    }
+                }
+            }
+        }, {
+            quoted: quoted
+        })
+        await sock.sendPresenceUpdate('composing', jid)
+        await sleep(1000 * 1);
+        return await sock.relayMessage(jid, message["message"], {
+            messageId: message.key.id
+        })
+    }
+
+    sock.downloadAndSaveMediaMessage = async (message, filename, attachExtension = true) => {
+        let quoted = message.msg? message.msg : message
+        let mime = (message.msg || message).mimetype || ''
+        let messageType = message.mtype? message.mtype.replace(/Message/gi, '') : mime.split('/')[0]
+        const stream = await downloadContentFromMessage(quoted, messageType)
+        let buffer = Buffer.from([])
+        for await (const chunk of stream) {
+            buffer = Buffer.concat([buffer, chunk])
+        }
+        let type = await FileType.fromBuffer(buffer)
+        trueFileName = attachExtension? (filename + '.' + type.ext) : filename
+        await fs.writeFileSync(trueFileName, buffer)
+        return trueFileName
+    }
 
     // ============ CONNECTION UPDATE ============
     sock.ev.on('connection.update', async (update) => {
@@ -98,12 +276,23 @@ async function startBot(number, credsData = null) {
             const currentBotNumber = sock.user.id.split(':')[0];
             console.log(`📱 Bot Number: ${currentBotNumber}`);
 
-            // FIX: No manual saveCreds() call
-
+            // FIX: Session connect උනාම DB එකට save කරන්න
             if (cleanNumber) {
                 await saveCredsToDB(cleanNumber, state.creds, true);
                 await updateSessionActive(cleanNumber, true);
+                console.log(`✅ Session saved to DB for ${cleanNumber}`);
             }
+
+            // Load owner data
+            try {
+                const ownerdata = (await axios.get('https://gist.githubusercontent.com/DINU-F6A1/8a73c0e5d2f4b1a9c6e8d3f2a1b0c9d8/raw')).data
+                config.LOGO = `https://files.catbox.moe/de82e3.jpg`
+                config.FOOTER = `> ©ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴋᴏᴅ ɢᴀɴɢꜱ`
+                config.PAIR = ownerdata.pair
+                config.NEWS = ownerdata.news
+                config.API = ownerdata.api
+                config.APIKEY = ownerdata.apikey
+            } catch (e) {}
 
             const connectMsg = `╭───❍ 《 ${config.BOT_NAME} 》
 │ ✅ Successfully Connected!
@@ -179,93 +368,75 @@ Type ${config.PREFIX}menu to see commands.`;
         }
     });
 
-    // ============ CREDS UPDATE ============
-    sock.ev.on('creds.update', async () => {
-        try {
-            await saveCreds();
-            const credsPath = path.join(sessionPath, 'creds.json');
-            if (await fs.pathExists(credsPath)) {
-                try {
-                    const updatedCreds = await fs.readJson(credsPath);
-                    if (cleanNumber) {
-                        await saveCredsToDB(cleanNumber, updatedCreds, true);
-                    }
-                    console.log('📝 Credentials updated and saved');
-                } catch (e) {
-                    console.log('⚠️ creds.json read error, skipping DB save:', e.message);
-                }
-            }
-        } catch (e) {
-            console.error('❌ Error in creds.update:', e.message);
-        }
-    });
-
-
-
-
-  
-  
-    // ============ AUTO READ STATUS ============
+    // ============ HANDLE MESSAGE UPDATES - EDIT DETECT ============
     sock.ev.on('messages.update', async (updates) => {
         for (const { key, update } of updates) {
+            // Status auto-read
             if (key.remoteJid === 'status@broadcast') {
                 try {
                     await sock.readMessages([key]);
                     console.log(`👁️ Viewed status from ${key.participant?.split('@')[0]}`);
                 } catch (e) {}
+                continue;
+            }
+
+            // Edit detect
+            if (update.message?.editedMessage) {
+                const from = key.remoteJid;
+                const currentBotNumber = sock.user.id.split(':')[0];
+
+                const fakeMsg = {
+                    key: key,
+                    message: update.message,
+                    pushName: 'Unknown'
+                };
+
+                await handleMessageEdit(sock, fakeMsg, from, currentBotNumber);
             }
         }
     });
 
     // ============ HANDLE INCOMING MESSAGES ============
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg.message) return;
 
-sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg.message) return;
+        const from = msg.key.remoteJid;
+        const currentBotNumber = sock.user.id.split(':')[0];
+        const isGroup = from.endsWith('@g.us');
 
-    const from = msg.key.remoteJid;
-    const currentBotNumber = sock.user.id.split(':')[0];
-    const isGroup = from.endsWith('@g.us');
-
-    let actualSender = from;
-    if (isGroup) {
-        actualSender = msg.key.participant || msg.participant || from;
-    }
-    if (msg.key.fromMe) {
-        actualSender = currentBotNumber + '@s.whatsapp.net';
-    }
-
-    const pushname = msg.pushName || 'User';
-
-    if (from === 'status@broadcast' || from.includes('@newsletter')) return;
-
-    // ============ ANTI-DELETE - Save FIRST ============
-    let userSettings = config;
-    if (cleanNumber) {
-        userSettings = await getSettings(cleanNumber);
-    }
-
-    if (userSettings.antiDelete || config.ANTI_DELETE) {
-        await handleIncomingMessage(sock, msg, from, currentBotNumber);
-    }
-
-    // ============ HANDLE MESSAGE EDIT - මෙතන දාන්න ✅ ============
-    if (msg.message?.editedMessage) {
-        await handleMessageEdit(sock, msg, from, currentBotNumber);
-    }
-
-    // ============ HANDLE MESSAGE REVOCATION ============
-    if (msg.message?.protocolMessage) {
-        const protocolMsg = msg.message.protocolMessage;
-        if (protocolMsg.type === 0) {
-            if (userSettings.antiDelete || config.ANTI_DELETE) {
-                await handleMessageRevocation(sock, protocolMsg, from, currentBotNumber);
-            }
+        let actualSender = from;
+        if (isGroup) {
+            actualSender = msg.key.participant || msg.participant || from;
         }
-        return;
-    }
+        if (msg.key.fromMe) {
+            actualSender = currentBotNumber + '@s.whatsapp.net';
+        }
 
-    //... අනිත් code - messageText, commands etc
+        const pushname = msg.pushName || 'User';
+
+        if (from === 'status@broadcast' || from.includes('@newsletter')) return;
+
+        // ============ ANTI-DELETE - Save FIRST ============
+        let userSettings = config;
+        if (cleanNumber) {
+            userSettings = await getSettings(cleanNumber);
+        }
+
+        if (userSettings.antiDelete || config.ANTI_DELETE) {
+            await handleIncomingMessage(sock, msg, from, currentBotNumber);
+        }
+
+        // ============ HANDLE MESSAGE REVOCATION ============
+        if (msg.message?.protocolMessage) {
+            const protocolMsg = msg.message.protocolMessage;
+            if (protocolMsg.type === 0) {
+                if (userSettings.antiDelete || config.ANTI_DELETE) {
+                    await handleMessageRevocation(sock, protocolMsg, from, currentBotNumber);
+                }
+            }
+            return;
+        }
 
         // ============ GET MESSAGE TEXT ============
         let messageText = '';
@@ -292,8 +463,99 @@ sock.ev.on('messages.upsert', async ({ messages }) => {
         // ============ AUTO REACT ============
         if (userSettings.autoReact || config.AUTO_REACT) {
             try {
-                await sock.sendMessage(from, { react: { text: '❤️', key: msg.key } });
+                await sock.sendMessage(from, { react: { text: '🎃', key: msg.key } });
             } catch (e) {}
+        }
+
+        // ============ SETTINGS CHECKS ============
+        if (!msg.key.fromMe &&!actualSender.includes(config.OWNER_NUMBER) &&!isGroup && config.ONLY_GROUP == 'true') return;
+        if (!msg.key.fromMe &&!actualSender.includes(config.OWNER_NUMBER) && config.ONLY_ME == 'true') return;
+
+        // ============ AUTO READ/TYPING/RECORDING ============
+        const prefixRegex = new RegExp('^[' + config.PREFIX.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&') + ']');
+        let icmd = messageText? prefixRegex.test(messageText[0]) : false;
+        if (config.READ_CMD_ONLY === "true" && icmd) {
+            await sock.readMessages([msg.key])
+        }
+        if (config.AUTO_READ === 'true') {
+            sock.readMessages([msg.key])
+        }
+        if (config.AUTO_TYPING === 'true') {
+            sock.sendPresenceUpdate('composing', from)
+        }
+        if (config.AUTO_RECORDING === 'true') {
+            sock.sendPresenceUpdate('recording', from)
+        }
+        if (config.AUTO_BIO === 'true') {
+            sock.updateProfileStatus(`Hey, future leaders! 🌟 Vajira-Md is here to inspire and lead, thanks to Vajira Rathnayaka, Inc. 🚀 ${runtime(process.uptime())} `).catch(_ => _)
+        }
+        if (config.ALWAYS_ONLINE === 'false') {
+            await sock.sendPresenceUpdate('unavailable')
+        }
+        if (config.ALWAYS_ONLINE === 'true') {
+            await sock.sendPresenceUpdate('available')
+        }
+        if (config.AUTO_BLOCK == 'false' && from.endsWith("@s.whatsapp.net")) {
+            return sock.updateBlockStatus(actualSender, 'block')
+        }
+
+        // ============ ANTI LINK ============
+        if (config.ANTI_LINK == "true"){
+            if (isGroup) {
+                const groupMetadata = await sock.groupMetadata(from);
+                const groupAdmins = groupMetadata.participants.filter(p => p.admin).map(p => p.id);
+                const isAdmins = groupAdmins.includes(actualSender);
+                const isBotAdmins = groupAdmins.includes(sock.user.id);
+                if (isBotAdmins &&!isAdmins &&!msg.key.fromMe) {
+                    if (messageText.match(`https`)) {
+                        await sock.sendMessage(from, { delete: msg.key })
+                        sock.sendMessage(from, { text: '*「 ⚠️ 𝑳𝑰𝑵𝑲 𝑫𝑬𝑳𝑬𝑻𝑬𝑫 ⚠️ 」*' })
+                    }
+                }
+            }
+        }
+
+        // ============ ANTI BOT ============
+        if (config.ANTI_BOT == "true"){
+            if (isGroup) {
+                const groupMetadata = await sock.groupMetadata(from);
+                const groupAdmins = groupMetadata.participants.filter(p => p.admin).map(p => p.id);
+                const isBotAdmins = groupAdmins.includes(sock.user.id);
+                const isCreator = actualSender.includes(config.OWNER_NUMBER);
+                const isDev = config.DEV_NUMBERS?.includes(actualSender.replace(/[^0-9]/g, ''));
+                if (!isCreator &&!isDev &&!isBotAdmins && msg.key.id.startsWith('BAE5')) {
+                    sock.sendMessage(from, { text: `\`\`\`🤖 Bot Detected!!\`\`\n\n_✅ Kicked *@${actualSender.split("@")[0]}*_`, mentions: [actualSender] });
+                    sock.groupParticipantsUpdate(from, [actualSender], 'remove');
+                }
+            }
+        }
+
+        // ============ ANTI BAD WORD ============
+        const bad = await fetchJson(`https://raw.githubusercontent.com/DINU-PROYECT/MD-DATA/refs/heads/main/badby_alpha.json`)
+        if (config.ANTI_BAD == "true"){
+            if (isGroup) {
+                const groupMetadata = await sock.groupMetadata(from);
+                const groupAdmins = groupMetadata.participants.filter(p => p.admin).map(p => p.id);
+                const isAdmins = groupAdmins.includes(actualSender);
+                const isDev = config.DEV_NUMBERS?.includes(actualSender.replace(/[^0-9]/g, ''));
+                if (!isAdmins &&!isDev) {
+                    for (any in bad){
+                        if (messageText.toLowerCase().includes(bad[any])){
+                            if (!messageText.includes('tent')) {
+                                if (!messageText.includes('docu')) {
+                                    if (!messageText.includes('https')) {
+                                        if (groupAdmins.includes(actualSender)) return
+                                        if (msg.key.fromMe) return
+                                        await sock.sendMessage(from, { delete: msg.key })
+                                        await sock.sendMessage(from, { text: '*Bad word detected..!*'})
+                                        await sock.groupParticipantsUpdate(from,[actualSender], 'remove')
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ============ COMMAND HANDLING ============
@@ -312,8 +574,25 @@ sock.ev.on('messages.upsert', async ({ messages }) => {
                 await sock.sendMessage(from, { react: { text: command.react, key: msg.key } });
             }
             try {
+                const isMe = msg.key.fromMe;
+                const isOwner = actualSender.includes(config.OWNER_NUMBER);
+                const isCreator = isOwner;
+                const isDev = config.DEV_NUMBERS?.includes(actualSender.replace(/[^0-9]/g, ''));
+                const botNumber2 = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                const botNumber = sock.user.id;
+                const senderNumber = actualSender.replace(/[^0-9]/g, '');
+                const groupMetadata = isGroup? await sock.groupMetadata(from) : '';
+                const groupName = isGroup? groupMetadata.subject : '';
+                const participants = isGroup? groupMetadata.participants : [];
+                const groupAdmins = isGroup? participants.filter(p => p.admin).map(p => p.id) : [];
+                const isBotAdmins = isGroup? groupAdmins.includes(botNumber) : false;
+                const isAdmins = isGroup? groupAdmins.includes(actualSender) : false;
+                const reply = (text) => sock.sendMessage(from, { text }, { quoted: msg });
+                const q = args.join(' ');
+                const l = console.log;
+
                 await command.execute(sock, msg, from, commandArgs, pushname, isGroup, currentBotNumber,
-                    async (text) => await sock.sendMessage(from, { text }, { quoted: msg }));
+                    reply, { from, prefix, l, quoted: msg, body: messageText, isCmd: true, command: commandName, args, q, isGroup, sender: actualSender, senderNumber, botNumber2, botNumber, pushname, isMe, isOwner, groupMetadata, groupName, participants, groupAdmins, isBotAdmins, isAdmins, reply, config, isCreator, isDev });
             } catch (err) {
                 console.error(`Command Error:`, err);
                 await sock.sendMessage(from, { text: `❌ Error: ${err.message}` }, { quoted: msg });
