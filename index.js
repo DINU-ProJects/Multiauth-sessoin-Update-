@@ -576,7 +576,9 @@ Type ${config.PREFIX}menu to see commands.`;
 
         // ============ COMMAND HANDLING ============
                 // ============ COMMAND HANDLING ============
-                // ============ COMMAND HANDLING ============
+                // ============ COMMAND HANDLING
+      
+        // ============ COMMAND HANDLING ============
         const prefix = userSettings.prefix || config.PREFIX;
         if (!messageText.startsWith(prefix)) return;
 
@@ -627,7 +629,7 @@ Type ${config.PREFIX}menu to see commands.`;
                         key: quotedKey,
                         message: quotedMsg,
                         mtype: Object.keys(quotedMsg)[0],
-                       ...quotedMsg
+                      ...quotedMsg
                     };
                     // Baileys download support
                     quoted.download = () => downloadMediaMessage(quoted, 'buffer', {}, {
@@ -636,7 +638,7 @@ Type ${config.PREFIX}menu to see commands.`;
                     });
                 }
 
-                // ============ Execute Command - FIXED ============
+                // ============ Execute Command - 4 PARAMETERS ONLY ============
                 await command.execute(sock, msg, {
                     from,
                     prefix,
@@ -673,7 +675,6 @@ Type ${config.PREFIX}menu to see commands.`;
             }
         }
     });
-
     // ============ HANDLE REACTIONS ============
     sock.ev.on('messages.reaction', async (reactions) => {
         for (const reaction of reactions) {
