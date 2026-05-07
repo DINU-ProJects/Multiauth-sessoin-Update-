@@ -1,13 +1,14 @@
-// index.js - Full Optimized Version with DB Auto-Save
+
+// index.js - උඩම, import ටිකට පස්සේ
 const { File } = require('node:buffer');
 if (typeof globalThis.File === 'undefined') {
   globalThis.File = File;
 }
-const fetchJson = require('node-fetch');
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs-extra');
-const axios = require('axios');
+const axios = require('axios'); // ← මේක තියෙනවද බලපන්
 const {
     makeWASocket,
     useMultiFileAuthState,
@@ -15,11 +16,26 @@ const {
     DisconnectReason,
     fetchLatestBaileysVersion,
     prepareWAMessageMedia,
-    generateWAMessageFromContent
+    generateWAMessageFromContent,
+    downloadContentFromMessage
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
+const FileType = require('file-type'); // ← මේක add කරන්න
 const config = require('./config');
+
+// ============ FIX: fetchJson function එක add කරපන් ============
+async function fetchJson(url, options = {}) {
+    try {
+        const res = await axios.get(url, options);
+        return res.data;
+    } catch (e) {
+        console.error('fetchJson error:', e.message);
+        return null;
+    }
+}
+// =============================================================
+
 const { initDatabase, getSettings } = require('./lib/database');
 const { saveCredsToDB, loadCredsFromDB, SESSION_BASE_PATH, updateSessionActive, removeSession, getAllActiveSessions } = require('./lib/credsManager');
 const { getTimestamp, sleep, formatJid, runtime, getBuffer } = require('./lib/functions');
