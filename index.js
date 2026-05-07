@@ -576,7 +576,7 @@ Type ${config.PREFIX}menu to see commands.`;
 
         // ============ COMMAND HANDLING ============
                 // ============ COMMAND HANDLING ============
-        // ============ COMMAND HANDLING ============
+                // ============ COMMAND HANDLING ============
         const prefix = userSettings.prefix || config.PREFIX;
         if (!messageText.startsWith(prefix)) return;
 
@@ -613,7 +613,7 @@ Type ${config.PREFIX}menu to see commands.`;
                 const q = commandArgs.join(' ');
                 const l = console.log;
 
-                // FIX: Quoted message object හරියට හදන්න + download method add කරන්න
+                // FIX: Quoted message object හරියට හදන්න
                 let quoted = null;
                 if (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
                     const quotedMsg = msg.message.extendedTextMessage.contextInfo.quotedMessage;
@@ -627,7 +627,7 @@ Type ${config.PREFIX}menu to see commands.`;
                         key: quotedKey,
                         message: quotedMsg,
                         mtype: Object.keys(quotedMsg)[0],
-                      ...quotedMsg
+                       ...quotedMsg
                     };
                     // Baileys download support
                     quoted.download = () => downloadMediaMessage(quoted, 'buffer', {}, {
@@ -636,8 +636,7 @@ Type ${config.PREFIX}menu to see commands.`;
                     });
                 }
 
-                // ============ Execute Command ============
-                // FIX: Parameter order හරියට දාන්න - plugin එකේ expect කරන විදිහට
+                // ============ Execute Command - FIXED ============
                 await command.execute(sock, msg, {
                     from,
                     prefix,
@@ -674,7 +673,6 @@ Type ${config.PREFIX}menu to see commands.`;
             }
         }
     });
-      
 
     // ============ HANDLE REACTIONS ============
     sock.ev.on('messages.reaction', async (reactions) => {
