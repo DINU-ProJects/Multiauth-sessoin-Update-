@@ -4,20 +4,22 @@ dotenv.config();
 
 module.exports = {
     // Bot Configuration
-    BOT_NAME: 'ZEUS-MINI',
-    OWNER_NAME: '@kelumXz',
+    BOT_NAME: 'oni httk dgnin',
+    OWNER_NAME: 'Itz-Dinu',
     OWNER_NUMBER: '94720244981',
-    BOT_VERSION: '2.0.0',
+    BOT_VERSION: '2.0.0.00009900099999',
     PREFIX: '.',
-    BOT_FOOTER: '> © Zeus Bot',
+    BOT_FOOTER: '> fuck',
     
     // API Keys
-    MONGODB_URI: process.env.MONGODB_URI || 'mongodb+srv://mrshrii404:JLtbz0CEOC1u6CwS@shri.gkhohrr.mongodb.net/',
+    MONGODB_URI: process.env.MONGODB_URI || 'your mongo url /',
   // config.j
     //... අනිත් config
-    GITHUB_REPO: 'DINU-ProJects/Github-Extrat', // ඔයාගේ repo
-    GHP_TOKEN: process.env.GHP_TOKEN || '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', // Heroku Config Vars වල දාන්න
-    ANTI_EDIT: true,
+
+    //extra 👇
+    GITHUB_REPO: 'username/reponame', // ඔයාගේ repo
+    GHP_TOKEN: process.env.GHP_TOKEN || 'ghp token', // Heroku Config Vars වල දාන්න
+    ANTI_EDIT: true, // anti edit not work (you can fix it)
  // GITHUB_TOKEN: process.env.GITHUB_TOKEN || '',
  //   GITHUB_GIST_ID: process.env.GITHUB_GIST_ID || '',
     
@@ -37,16 +39,16 @@ module.exports = {
     },
     
     // Newsletter
-    NEWSLETTER_JID: '120363420985544024@newsletter',
+    NEWSLETTER_JID: 'chnnel jid',
     NEWSLETTER_MESSAGE_ID: '428',
     
     // Group
-    GROUP_INVITE_LINK: 'https://chat.whatsapp.com/DiefTmkDKSXCrHgXxAKHAd',
+    GROUP_INVITE_LINK: 'support wp group link',
     
     // Auto Like Emojis
     AUTO_LIKE_EMOJI: ['🧩', '🍉', '💜', '🌸', '🪴', '💊', '💫', '🍂', '🌟', '🎋', '😶‍🌫️', '🫀', '🧿', '👀', '🤖', '🚩', '🥰', '🗿', '💜', '💙', '🌝', '🖤', '💚'],
     
-    // Web Dashboard
+    // Web admin Dashboard
     WEB_PORT: 3000,
     DASHBOARD_USERNAME: 'admin',
     DASHBOARD_PASSWORD: 'admin123',
